@@ -78,7 +78,8 @@ AutoDL 上全部落在数据盘，**不要写 `/root/checkpoints`**（系统盘�
 
 | 做什么 | 命令 |
 |--------|------|
-| 下载分离权重 | `./download_models.sh` |
+| 下载分离权重（已合格会跳过） | `./download_models.sh` |
+| 强制重下 | `./download_models.sh --force` |
 | 只要 ONNX | `./download_models.sh --onnx-only` |
 | 只要 ClearVoice | `./download_models.sh --ss-only` |
 | 额外拉 ASR | `./download_models.sh --asr` |

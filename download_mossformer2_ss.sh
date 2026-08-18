@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # 内部脚本：下载 MossFormer2_SS_16K。请用仓库根目录 ./download_models.sh
-# 输出: $MOSS_CKPT_DIR/MossFormer2_SS_16K/last_best_checkpoint.pt
-# 国内默认 ModelScope，失败再 HuggingFace。
+# 先检查 OUT_DIR 下文件是否合格，合格则跳过。
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$PROJECT_DIR/paths_defaults.sh"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/download_lib.sh"
 MODEL="${MODEL:-MossFormer2_SS_16K}"
 OUT_DIR="${OUT_DIR:-$MOSS_SS_DIR}"
 HF_REPO="${HF_REPO:-alibabasglab/$MODEL}"
@@ -17,64 +18,48 @@ log_ok()   { printf '[ OK  %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 log_warn() { printf '[WARN %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 log_err()  { printf '[ERR  %s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
-file_size() {
-  local f="$1"
-  if [[ ! -f "$f" ]]; then echo 0; return; fi
-  stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0
-}
-
-is_lfs_pointer() {
-  local f="$1"
-  [[ -f "$f" ]] || return 1
-  local sz
-  sz="$(file_size "$f")"
-  [[ "$sz" -lt 2048 ]] || return 1
-  head -c 40 "$f" 2>/dev/null | grep -q 'git-lfs' && return 0
-  return 1
-}
-
-mkdir -p "$OUT_DIR"
 PT="$OUT_DIR/last_best_checkpoint.pt"
 BARE="$OUT_DIR/last_best_checkpoint"
 TMP="$OUT_DIR/last_best_checkpoint.pt.partial"
 
+log_info "检查 ClearVoice 目录: $OUT_DIR"
+if [[ -n "${OUT_DIR}" && "$OUT_DIR" != "/" ]]; then
+  mkdir -p "$OUT_DIR"
+else
+  log_err "OUT_DIR 非法: ${OUT_DIR:-<empty>}"
+  exit 1
+fi
+
+if [[ "${VM_FORCE_DOWNLOAD:-0}" != "1" ]] && is_pt_ok "$PT"; then
+  ensure_ss_pointer "$OUT_DIR"
+  log_ok "已存在且合格，跳过下载: $PT ($(file_size "$PT") bytes)"
+  exit 0
+fi
+
+if [[ "${VM_FORCE_DOWNLOAD:-0}" == "1" ]]; then
+  log_info "--force：将重新下载 $PT"
+elif [[ -e "$PT" ]]; then
+  log_warn "已有文件不合格 ($(explain_bad "$PT"))，将重新下载"
+fi
+
+if [[ "${VM_FORCE_DOWNLOAD:-0}" != "1" ]] && ! is_pt_ok "$PT" && is_pt_ok "$BARE"; then
+  mv -f "$BARE" "$PT"
+  ensure_ss_pointer "$OUT_DIR"
+  log_ok "已将二进制 last_best_checkpoint 重命名为 .pt，跳过下载"
+  exit 0
+fi
+
 if [[ -f /etc/network_turbo ]]; then
   # shellcheck disable=SC1091
-  source /etc/network_turbo
-  log_info "已 source /etc/network_turbo（直连 HuggingFace）"
+  source /etc/network_turbo || true
+  log_info "已 source /etc/network_turbo"
 fi
 
-write_pointer() {
-  # ClearVoice: last_best_checkpoint 是文本，内容为权重文件名（不能是 .pt 的 symlink）
-  printf '%s\n' "last_best_checkpoint.pt" >"$BARE"
-  log_ok "文本指针 $BARE → last_best_checkpoint.pt"
-}
-
-# 已有有效 .pt
-if [[ -f "$PT" ]] && ! is_lfs_pointer "$PT"; then
-  sz="$(file_size "$PT")"
-  if [[ "$sz" -gt 1048576 ]]; then
-    write_pointer
-    log_ok "已存在: $PT ($sz bytes)"
-    exit 0
-  fi
+rm -f "$TMP"
+# 只删不合格的目标，避免误删合格文件（force 时才删）
+if [[ -f "$PT" ]] && ! is_pt_ok "$PT"; then
+  rm -f "$PT"
 fi
-
-# 无后缀大文件（旧布局）→ 挪成 .pt，再写文本指针
-if [[ -f "$BARE" ]] && ! is_lfs_pointer "$BARE"; then
-  sz="$(file_size "$BARE")"
-  if [[ "$sz" -gt 1048576 ]]; then
-    if [[ ! -f "$PT" ]]; then
-      mv -f "$BARE" "$PT"
-      log_ok "已将二进制 last_best_checkpoint 重命名为 .pt"
-    fi
-    write_pointer
-    exit 0
-  fi
-  log_warn "last_best_checkpoint 过小($sz)，当作无效 LFS 指针"
-fi
-
-rm -f "$PT" "$TMP"
 
 download_url() {
   local url="$1"
@@ -90,7 +75,7 @@ download_url() {
   fi
 }
 
-# 1) ModelScope（国内默认） 2) HuggingFace
+log_info "开始下载 → $PT"
 if download_url "$MS_URL" "$TMP"; then
   :
 else
@@ -99,19 +84,14 @@ else
   download_url "$HF_URL" "$TMP" || true
 fi
 
-sz="$(file_size "$TMP")"
-if [[ ! -f "$TMP" ]] || [[ "$sz" -lt 1048576 ]] || is_lfs_pointer "$TMP"; then
-  log_err "下载失败或文件无效: $TMP ($sz bytes)"
-  log_err "请确认已 source /etc/network_turbo，或手动下载放到:"
-  log_err "  $PT"
-  log_err "HF: $HF_URL"
+if ! is_pt_ok "$TMP"; then
+  log_err "下载失败或文件无效: $TMP ($(explain_bad "$TMP"))"
+  log_err "请放到: $PT"
   rm -f "$TMP"
   exit 1
 fi
 
 mv -f "$TMP" "$PT"
-# 清掉无效 LFS / 错误 symlink，写入 ClearVoice 所需文本指针
-rm -f "$BARE"
-write_pointer
-log_ok "完成: $PT ($sz bytes)"
+ensure_ss_pointer "$OUT_DIR"
+log_ok "完成: $PT ($(file_size "$PT") bytes)"
 ls -lh "$OUT_DIR"
