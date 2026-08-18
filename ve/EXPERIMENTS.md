@@ -108,10 +108,13 @@ P5（换 ASR 模型）：不排期。
 
 ### T1 — 同一 mix，只改 Qwen3 解码
 
-固定锁定门控与提取波形：
+固定锁定门控与提取波形。须先有 mix 提取（`samples.jsonl` + `all_results.jsonl`）。没有就先 `ENROLL_VAD=0 PIPELINE=mix … ./run_all.sh`。
 
 ```bash
+# 在 /root/extract/ve（不要用 extract 根的 ve.sh 路径去 ve/ 里找）
 VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1
+# 或 ./ve.sh t1
+# 或从 extract 根: VE_OUT=... ./ve.sh t1
 # 或:
 ASR_LANGUAGE=Chinese ./run_asr_cer.sh --out-dir "$VE_OUT/reports/asr_cer_zh"
 ASR_LANGUAGE=Chinese ASR_DOMAIN_CONTEXT=1 ./run_asr_cer.sh --out-dir "$VE_OUT/reports/asr_cer_zh_domain"

@@ -27,8 +27,66 @@ if [[ -z "$SSSSS" ]]; then
 fi
 cmd="${1:-help}"
 
+# T1/T3 叠在已完成的 mix 提取上，不新建门控。
+mix_ok() {
+  local d="$1"
+  [[ -f "$d/manifest/samples.jsonl" && -f "$d/results/all_results.jsonl" ]]
+}
+
+list_mix_outs() {
+  local d
+  for d in /root/autodl-tmp/ve_mix_novad /root/autodl-tmp/ve_mix_vad \
+           /root/autodl-tmp/ve_mix /root/autodl-tmp/ve_presence_best; do
+    if mix_ok "$d"; then
+      echo "  $d"
+    fi
+  done
+  # 其它 ve_* 目录
+  shopt -s nullglob
+  for d in /root/autodl-tmp/ve_*; do
+    [[ -d "$d" ]] || continue
+    mix_ok "$d" || continue
+    case "$d" in
+      */ve_mix_novad|*/ve_mix_vad|*/ve_mix|*/ve_presence_best) continue ;;
+    esac
+    echo "  $d"
+  done
+  shopt -u nullglob
+}
+
+require_mix_out() {
+  local ve="${1:?}"
+  if mix_ok "$ve"; then
+    echo "$ve"
+    return 0
+  fi
+  echo "[ERR] T1/T3 需要已完成的 mix 提取（manifest/samples.jsonl + results/all_results.jsonl）。" >&2
+  echo "      当前 VE_OUT=$ve 不齐。" >&2
+  echo >&2
+  echo "这台机上已有的 VE 产物:" >&2
+  local found
+  found="$(list_mix_outs || true)"
+  if [[ -n "$found" ]]; then
+    echo "$found" >&2
+    echo "换目录再跑: VE_OUT=<上面某一行> ./run_next_lift.sh $cmd" >&2
+  else
+    echo "  （没有找到任何 mix 产物）" >&2
+    echo >&2
+    echo "先跑锁定 mix（会写出 ve_mix_novad）:" >&2
+    echo "  cd $ROOT" >&2
+    echo "  ENROLL_VAD=0 PIPELINE=mix PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \\" >&2
+    echo "  FORCE_CALIB=1 HOLDOUT_FRAC=0.3 ./run_all.sh" >&2
+  fi
+  echo >&2
+  echo "找一下: ls /root/autodl-tmp/ve_*/manifest/samples.jsonl" >&2
+  echo "ve.sh 在 extract 根: cd /root/extract && ./ve.sh t1" >&2
+  echo "在 ve/ 里请用: ./run_next_lift.sh t1  或  ./ve.sh t1（本目录也有入口）" >&2
+  exit 2
+}
+
 t1() {
-  local ve="${VE_OUT:-/root/autodl-tmp/ve_mix_novad}"
+  local ve
+  ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
   echo "=== T1 decode ablation  VE_OUT=$ve ==="
   echo "[arm] auto (baseline, 若已有 asr_cer 可跳过)"
   # Chinese
@@ -63,7 +121,8 @@ t2() {
 }
 
 t3() {
-  local ve="${VE_OUT:-/root/autodl-tmp/ve_mix_novad}"
+  local ve
+  ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
   echo "=== T3 retry on duration mismatch  VE_OUT=$ve ==="
   OUT="${ve}/reports/asr_cer_retry"
   mkdir -p "$OUT"

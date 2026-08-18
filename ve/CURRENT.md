@@ -25,7 +25,7 @@ FORCE_CALIB=1 HOLDOUT_FRAC=0.3 \
 ./run_all.sh
 ```
 
-下一刀（不改默认）：`VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1`
+下一刀（不改默认；须已有 mix 提取）：`VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1`
 
 | 开关 | 值 | 原因 |
 |------|----|------|

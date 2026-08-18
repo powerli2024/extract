@@ -23,7 +23,7 @@ cd ve
 VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1
 ```
 
-根目录也可用 `./ve.sh t1`（等价 `cd ve && ./run_next_lift.sh t1`）。
+根目录 `./ve.sh t1`，或 `cd ve && ./run_next_lift.sh t1`（`ve/` 里也有 `./ve.sh`）。T1 须已有 mix 提取产物。
 
 ---
 
