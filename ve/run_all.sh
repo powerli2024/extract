@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 [[ -f "$ROOT/.env_ve" ]] && source "$ROOT/.env_ve" || true
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 
 usage() {
   cat <<'EOF'
@@ -176,7 +178,6 @@ if [[ -n "${WESEP_ROOT:-}" ]]; then
 elif [[ -d /root/autodl-tmp/ve_models/wesep/wesep ]]; then
   export PYTHONPATH="/root/autodl-tmp/ve_models/wesep:${PYTHONPATH}"
 fi
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"
 
 DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
 BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
@@ -245,8 +246,14 @@ echo "DATA_DIR=$DATA_DIR BEST_SEP=$BEST_SEP_DIR DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
 echo "PYTHON_BIN=$PYTHON_BIN"
 "$PYTHON_BIN" -c "import sys; print('sys.executable=', sys.executable)"
-"$PYTHON_BIN" -c "import modelscope; print('modelscope OK', modelscope.__file__)" \
-  || echo "[WARN] modelscope 不可用 → Presence 可能回退 ResNet34"
+case "$(echo "$PRESENCE_BACKEND" | tr '[:upper:]' '[:lower:]')" in
+  eres2netv2|eres|eres2net|campplus|cam++|campplus_zh)
+    if ! ensure_modelscope "$PYTHON_BIN"; then
+      echo "[ERR] Presence 需要 modelscope，且必须装进上面这个 PYTHON_BIN（不要另开 ve env）。"
+      exit 1
+    fi
+    ;;
+esac
 
 nvidia-smi || true
 

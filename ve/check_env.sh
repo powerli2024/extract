@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 [[ -f "$ROOT/.env_ve" ]] && source "$ROOT/.env_ve" || true
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 
 export VE_ROOT="${VE_ROOT:-$ROOT}"
 export VE_OUT="${VE_OUT:-/root/autodl-tmp/ve}"
@@ -15,13 +17,13 @@ export MOSS_ONNX_PATH="${MOSS_ONNX_PATH:-/root/autodl-tmp/checkpoints/MossFormer
 export WESEP_ROOT="${WESEP_ROOT:-$VE_MODEL_DIR/wesep}"
 export PYTHONPATH="$ROOT/scripts:${ROOT}/../scripts:${ROOT}/../VD/tools:${ROOT}/../VM/scripts:${WESEP_ROOT}:${PYTHONPATH:-}"
 
-PIPELINE_RAW="${PIPELINE:-all}"
+PIPELINE_RAW="${PIPELINE:-mix}"
 PIPELINE_LC="$(echo "$PIPELINE_RAW" | tr '[:upper:]' '[:lower:]')"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"
 
 echo "=== VE check_env (PIPELINE=$PIPELINE_LC) ==="
 echo "Python: $PYTHON_BIN"
 "$PYTHON_BIN" -V
+"$PYTHON_BIN" -c "import sys; print('executable', sys.executable)"
 command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader || echo "no nvidia-smi"
 
 if grep -q $'\r' "$ROOT/setup_env.sh" 2>/dev/null; then
@@ -71,15 +73,14 @@ for mod in ("numpy", "soundfile", "yaml", "librosa", "torchaudio"):
 try:
     import modelscope  # noqa: F401
     check("modelscope", True)
-except Exception:
-    check("modelscope", False, "(将回退 ResNet34)")
+    print(f"       modelscope={getattr(modelscope, '__version__', '?')} ← {modelscope.__file__}")
+except Exception as e:
+    check("modelscope", False, f"{e} → {sys.executable} -m pip install -U modelscope 或 ./setup_env.sh")
 
 ve_root = Path(os.environ.get("VE_ROOT", ".")).resolve()
 sys.path.insert(0, str(ve_root / "scripts"))
 for extra in (
     ve_root.parent / "scripts",
-    ve_root.parent / "VM" / "scripts",
-    Path("/root/extract/scripts"),
     Path("/root/extract/scripts"),
     Path(os.environ.get("WESEP_ROOT", "")),
 ):
@@ -98,9 +99,11 @@ chs = Path(os.environ.get("SPK_CHS_DIR", str(model / "cnceleb_resnet34_LM")))
 moss = Path(os.environ.get("MOSS_ONNX_PATH", "/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx"))
 wesep_root = Path(os.environ.get("WESEP_ROOT", str(model / "wesep")))
 
-need_ps4 = pipeline in ("all", "ps4", "ps4_bsrnn")
-need_wesep = pipeline in ("all", "wesep", "wesep_bsrnn")
-need_sep = pipeline in ("all", "sep_route", "mossformer", "route")
+need_ps4 = pipeline in ("ps4", "ps4_bsrnn")
+need_wesep = pipeline in ("wesep", "wesep_bsrnn")
+need_sep = pipeline in ("sep_route", "mossformer", "route") or os.environ.get(
+    "USE_SEP", "1"
+).strip() in ("1", "true", "yes")
 
 check(
     f"DATA_DIR {data}",
@@ -126,17 +129,25 @@ if need_ps4:
         except Exception as e:
             check("PS4 HF inference.py import", False, str(e))
 
-check(
-    f"cnceleb {chs}",
-    chs.is_dir() and (chs / "config.yaml").is_file(),
-    "运行 ./download_models.sh（Presence 回退）",
-)
+if os.environ.get("PRESENCE_BACKEND", "eres2netv2").lower() in (
+    "resnet34", "resnet34_lm", "wespeaker",
+):
+    check(
+        f"cnceleb {chs}",
+        chs.is_dir() and (chs / "config.yaml").is_file(),
+        "ONLY=resnet34_lm ./download_presence_encoders.sh",
+    )
 eres_ok = eres.is_dir() and (
     (eres / "MODELSCOPE_PATH.txt").is_file()
+    or (eres / "configuration.json").is_file()
     or any(eres.rglob("*.pt"))
     or any(eres.rglob("*.bin"))
 )
-warn(f"ERes2Net dir {eres}", eres_ok, "可选；失败时 PRESENCE_BACKEND=resnet34")
+check(
+    f"ERes2Net dir {eres}",
+    eres_ok,
+    "ONLY=eres2netv2 ./download_presence_encoders.sh（须同一 PYTHON_BIN 已装 modelscope）",
+)
 
 if need_wesep:
     warn(f"WESEP_ROOT {wesep_root}", (wesep_root / "wesep").is_dir(), "运行 ./download_wesep.sh")
@@ -191,6 +202,6 @@ if Path("/root/autodl-tmp").is_dir():
 print("VE_OUT=", ve_out)
 print("VE_MODEL_DIR=", model)
 print("PIPELINE=", pipeline)
-print("用法: PIPELINE=ps4|wesep|sep_route ./check_env.sh")
+print("用法: PIPELINE=mix ./check_env.sh")
 sys.exit(0 if ok else 2)
 PY

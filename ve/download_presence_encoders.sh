@@ -11,10 +11,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$ROOT/.env_ve" ]] && source "$ROOT/.env_ve" || true
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 
 MODEL_DIR="${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"
-ONLY="${ONLY:-eres2netv2,campplus,resnet34_lm,vblink2}"
+ONLY="${ONLY:-eres2netv2}"
 
 if [[ -f /etc/network_turbo ]]; then
   # shellcheck disable=SC1091
@@ -33,8 +34,14 @@ want() {
 echo "============================================"
 echo " download_presence_encoders"
 echo " MODEL_DIR=$MODEL_DIR"
+echo " PYTHON_BIN=$PYTHON_BIN"
 echo " ONLY=$ONLY"
 echo "============================================"
+
+if ! ensure_modelscope "$PYTHON_BIN"; then
+  echo "[ERR] 下载 ERes/CAM++ 需要 modelscope"
+  exit 1
+fi
 
 "$PYTHON_BIN" -c "import huggingface_hub" 2>/dev/null || \
   "$PYTHON_BIN" -m pip install -U huggingface_hub \

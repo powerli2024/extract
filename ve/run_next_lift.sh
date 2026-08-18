@@ -14,8 +14,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$ROOT/.env_ve" ]] && source "$ROOT/.env_ve" || true
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 export PYTHONPATH="$ROOT/scripts:${ROOT}/../scripts:${PYTHONPATH:-}"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"
 DEVICE="${DEVICE:-cuda:0}"
 ASR_MODEL_DIR="${ASR_MODEL_DIR:-${QWEN3_ASR_DIR:-/root/autodl-tmp/Qwen3-ASR-1.7B}}"
 SSSSS="${SSSSS_DIR:-}"

@@ -10,14 +10,15 @@
 环境清单见 [`SETUP.md`](SETUP.md)。问题口径与已否决方向见 [`PROBLEM.md`](PROBLEM.md)。分阶命令见 [`EXPERIMENTS.md`](EXPERIMENTS.md)。
 
 ```bash
+conda activate qwen3-asr
 cd /root/extract/ve
+git pull --ff-only
+chmod +x *.sh
 cp -n .env_ve.example .env_ve
-source .env_ve
 ./setup_env.sh && source .env_ve
-./download_presence_encoders.sh
-./download_moss_onnx.sh          # Presence USE_SEP=1 需要；同仓会委托 ../download_mossformer2_onnx.sh
-./download_qwen3_asr.sh
-./check_env.sh
+ONLY=eres2netv2 ./download_presence_encoders.sh
+./download_moss_onnx.sh          # Presence USE_SEP=1 需要
+PIPELINE=mix ./check_env.sh
 
 ENROLL_VAD=0 PIPELINE=mix \
 PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \

@@ -4,7 +4,8 @@ librosa>=0.10
 pyyaml>=6.0
 tqdm>=4.65
 editdistance>=0.6
+modelscope>=1.14
 huggingface_hub>=0.20
 addict>=2.4.0
-# Presence: modelscope / wespeaker 由 setup_env.sh 另装
+# Presence 锁定用 ERes2NetV2，须装进与 PYTHON_BIN 同一解释器（默认 qwen3-asr）
 # MossFormer ORT GPU 库见 requirements_moss_ort.txt（download_moss_onnx.sh / setup_env 安装）

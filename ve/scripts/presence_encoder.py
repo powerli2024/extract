@@ -320,19 +320,31 @@ def create_presence_encoder(
         try:
             return ERes2NetV2Encoder(model_dir=eres_dir, device=device)
         except Exception as e:
+            import os
             import sys
 
-            print(f"[WARN] ERes2NetV2 加载失败，回退 ResNet34-LM", flush=True)
-            print(f"[WARN]   python={sys.executable}", flush=True)
-            print(f"[WARN]   {type(e).__name__}: {e}", flush=True)
+            print(f"[ERR] ERes2NetV2 加载失败  python={sys.executable}", flush=True)
+            print(f"[ERR]   {type(e).__name__}: {e}", flush=True)
             print(
                 f"[HINT] 装到当前解释器: {sys.executable} -m pip install -U modelscope",
                 flush=True,
             )
+            print(
+                "[HINT] 或: cd /root/extract/ve && ./setup_env.sh && "
+                "ONLY=eres2netv2 ./download_presence_encoders.sh",
+                flush=True,
+            )
             cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
             if cause is not None:
-                print(f"[WARN]   cause: {type(cause).__name__}: {cause}", flush=True)
-            backend = "resnet34"
+                print(f"[ERR]   cause: {type(cause).__name__}: {cause}", flush=True)
+            if os.environ.get("ALLOW_PRESENCE_FALLBACK", "").strip() in ("1", "true", "yes"):
+                print("[WARN] ALLOW_PRESENCE_FALLBACK=1 → 回退 ResNet34-LM", flush=True)
+                backend = "resnet34"
+            else:
+                raise RuntimeError(
+                    "锁定 Presence 是 ERes2NetV2，禁止静默回退 ResNet。"
+                    "装 modelscope 到当前 PYTHON_BIN，或显式 PRESENCE_BACKEND=resnet34_lm。"
+                ) from e
     if backend in ("campplus", "cam++", "campplus_zh"):
         return CAMPlusEncoder(model_dir=campplus_dir or eres_dir, device=device)
     if backend in ("vblink2", "vblink", "vblinkp", "samresnet34"):
