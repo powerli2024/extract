@@ -48,19 +48,25 @@ export PATH="$(dirname "$PYTHON_BIN"):${PATH:-/usr/bin}"
 
 ensure_modelscope() {
   local py="${1:-$PYTHON_BIN}"
-  if "$py" -c "import modelscope" 2>/dev/null; then
-    "$py" -c "import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), '←', modelscope.__file__); print('[OK] python', sys.executable)"
-    return 0
-  fi
-  echo "[INFO] 当前解释器无 modelscope，装进: $py"
   local mirror=(
     -i "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     --trusted-host "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
   )
-  "$py" -m pip install -U modelscope addict huggingface_hub "${mirror[@]}" || {
-    echo "[ERR] modelscope 安装失败。手动:"
-    echo "      $py -m pip install -U modelscope"
+  # 仅有 modelscope 不够：speaker-verification pipeline 还要 audio extra / funasr
+  local need=0
+  "$py" -c "import modelscope" 2>/dev/null || need=1
+  "$py" -c "from modelscope.pipelines import pipeline" 2>/dev/null || need=1
+  "$py" -c "import funasr" 2>/dev/null || need=1
+  if [[ "$need" == "0" ]]; then
+    "$py" -c "import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), '←', modelscope.__file__); print('[OK] python', sys.executable)"
+    return 0
+  fi
+  echo "[INFO] 安装 modelscope[audio] + funasr → $py"
+  "$py" -m pip install -U "modelscope[audio]" funasr kaldiio addict huggingface_hub "${mirror[@]}" \
+    || "$py" -m pip install -U modelscope funasr kaldiio addict huggingface_hub "${mirror[@]}" || {
+    echo "[ERR] modelscope/audio 安装失败。手动:"
+    echo "      $py -m pip install -U 'modelscope[audio]' funasr kaldiio"
     return 1
   }
-  "$py" -c "import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), '←', modelscope.__file__); print('[OK] python', sys.executable)"
+  "$py" -c "from modelscope.pipelines import pipeline; import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), 'pipeline OK'); print('[OK] python', sys.executable)"
 }

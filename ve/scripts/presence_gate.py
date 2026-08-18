@@ -377,9 +377,18 @@ class PresenceGate:
                 best = float(best_window["score"])
                 best_stream = "mix_window"
                 sims["mix_window"] = best
+                embs["mix_window"] = embs_w[0] if embs_w else e
+                for i, winfo in enumerate(wins):
+                    if int(winfo["start"]) == int(best_window["start"]) and int(winfo["end"]) == int(best_window["end"]):
+                        embs["mix_window"] = embs_w[i]
+                        break
 
         score_raw = float(best)
-        t_emb = embs.get(best_stream) or embs.get("mix") or e
+        t_emb = embs.get(best_stream)
+        if t_emb is None:
+            t_emb = embs.get("mix")
+        if t_emb is None:
+            t_emb = e
 
         z_mu = z_sig = z_mu_t = z_sig_t = z_a = z_b = None
         score_norm = "raw"
