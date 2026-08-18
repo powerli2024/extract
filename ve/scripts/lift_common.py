@@ -8,11 +8,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-# 领域 prompt：不要塞唤醒词（hyp 里从未出现唤醒词）。
+# Qwen3-ASR 官方 context 是热词/背景知识，不是自然语言指令（SFT 明确不 follow instruction）。
 DOMAIN_CONTEXT = (
     "智能家居短指令。设备包括空调、灯、窗帘、电视、音箱。"
     "动作包括打开、关闭、调到、暂停、播放。"
     "只转写对设备说的那一句，忽略背景人声、新闻和旁白。"
+)
+HOTWORD_CONTEXT = (
+    "Vocabulary: 科慕, COLMO, 空调, 风速, 智控温, ECO, 无风, 节能, "
+    "洗烘, 冲锋衣, 盖世音雄, 防直吹"
 )
 
 ZH_THR = 0.29305

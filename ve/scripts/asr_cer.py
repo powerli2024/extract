@@ -350,6 +350,9 @@ def _asr_context(args: argparse.Namespace, sample: dict[str, Any]) -> Optional[s
     raw = getattr(args, "context", None)
     if raw is not None and str(raw).strip():
         return str(raw).strip()
+    if getattr(args, "hotwords", False):
+        from lift_common import HOTWORD_CONTEXT
+        return HOTWORD_CONTEXT
     if getattr(args, "domain_context", False):
         from lift_common import DOMAIN_CONTEXT
         return DOMAIN_CONTEXT
@@ -362,6 +365,8 @@ def _decode_tag(args: argparse.Namespace) -> str:
     lang = args.language or ("guess" if args.guess_language else "auto")
     if getattr(args, "context", None) and str(args.context).strip():
         ctx = "custom"
+    elif getattr(args, "hotwords", False):
+        ctx = "hotwords"
     elif getattr(args, "domain_context", False):
         ctx = "domain"
     elif getattr(args, "use_wake_context", False):
@@ -388,10 +393,12 @@ def process_one(args: argparse.Namespace, sample: dict[str, Any],
     if lang is None and args.guess_language:
         lang = guess_language(sample.get("wake_text"))
     rec["language"] = lang
-    rec["asr_context"] = "domain" if getattr(args, "domain_context", False) else (
-        "wake" if getattr(args, "use_wake_context", False) else (
-            "custom" if (getattr(args, "context", None) or "").strip() else "none"
-        )
+    rec["asr_context"] = (
+        "hotwords" if getattr(args, "hotwords", False) else
+        "domain" if getattr(args, "domain_context", False) else
+        "wake" if getattr(args, "use_wake_context", False) else
+        "custom" if (getattr(args, "context", None) or "").strip() else
+        "none"
     )
     try:
         import librosa
@@ -586,11 +593,14 @@ def parse_args() -> argparse.Namespace:
                    help="（VM 风格，默认关）把唤醒词作为 context/prompt 传给 ASR；干净评测默认关闭")
     p.add_argument("--context", default=None,
                    help="显式 ASR context 字符串；与 --domain-context / --use-wake-context 互斥优先")
+    p.add_argument("--hotwords", action="store_true",
+                   help="Qwen3 热词表 context（Vocabulary: …），不是指令句")
     p.add_argument("--domain-context", action="store_true",
-                   help="使用智能家居领域 context（不用唤醒词）")
+                   help="使用智能家居领域指令 context（T1；官方更推荐 --hotwords）")
     p.add_argument("--retry-mismatch", action="store_true",
                    help="hyp 与时长严重不匹配时二次解码（Chinese+领域），再不行回退 mix")
-    p.add_argument("--limit", type=int, default=0, help="只跑前 N 条待ASR样本（冒烟）")
+    p.add_argument("--neg-fa", action="store_true",
+                   help="只转写 Presence 接受的 neg，写出 asr_results.jsonl（叠话加拒用）")
     p.add_argument("--resume", action="store_true", default=True,
                    help="跳过已存在于 asr_results.jsonl 且同口径记录（默认开启）")
     p.add_argument("--no-resume", dest="resume", action="store_false")
@@ -599,8 +609,69 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def run_neg_fa(args: argparse.Namespace) -> int:
+    """转写被接受的 neg，供叠话长句加拒。"""
+    from tqdm import tqdm
+
+    ve_out = (args.ve_out or default_ve_out()).resolve()
+    samples = load_jsonl((args.samples or ve_out / "manifest" / "samples.jsonl").resolve())
+    all_res = {r["uid"]: r for r in load_jsonl((args.results or ve_out / "results" / "all_results.jsonl").resolve())}
+    out_dir = (args.out_dir or ve_out / "reports" / "asr_neg_fa").resolve()
+    ensure_dir(out_dir)
+    out_path = out_dir / "asr_results.jsonl"
+    norm_ver = _decode_tag(args)
+    tasks: list[tuple[dict, dict, str]] = []
+    for s in samples:
+        if s.get("split") != "neg":
+            continue
+        r = all_res.get(s["uid"]) or {}
+        if r.get("decision") != "accept":
+            continue
+        wav = resolve_wav(ve_out, s, r)
+        if not wav:
+            cw = s.get("cmd_wav") or r.get("cmd_wav")
+            if cw and Path(str(cw)).is_file():
+                wav = str(Path(str(cw)).resolve())
+        if wav:
+            tasks.append((s, r, wav))
+    if args.limit and args.limit > 0:
+        tasks = tasks[: args.limit]
+    print(f"[INFO] neg FA 待 ASR={len(tasks)} → {out_path}", flush=True)
+    records: dict[str, dict[str, Any]] = {}
+    if args.resume and out_path.is_file():
+        for row in load_jsonl(out_path):
+            if row.get("uid"):
+                records[row["uid"]] = row
+        tasks = [t for t in tasks if t[0]["uid"] not in records]
+    asr = None
+    if tasks and not args.fake_asr:
+        model_dir = resolve_asr_dir(str(args.model_dir) if args.model_dir else None)
+        if not model_dir:
+            raise SystemExit("本地未找到 Qwen3-ASR-1.7B")
+        asr = Qwen3ASRBackend(
+            model_dir, device=args.device, dtype=args.dtype,
+            max_new_tokens=args.max_new_tokens, max_batch=max(1, int(args.batch)),
+        )
+    pbar = tqdm(total=len(tasks), desc="neg-fa") if tasks else None
+    for s, r, wav in tasks:
+        records[s["uid"]] = process_one(args, s, r, wav, asr, norm_ver)
+        if pbar is not None:
+            pbar.update(1)
+    if pbar is not None:
+        pbar.close()
+    ordered = [records[s["uid"]] for s, _, _ in tasks if s["uid"] in records]
+    # 含 resume 的全部
+    if out_path.is_file() and args.resume:
+        ordered = list(records.values())
+    write_jsonl(out_path, ordered)
+    print(f"[OK] neg FA n={len(ordered)} → {out_path}")
+    return 0
+
+
 def main() -> int:
     args = parse_args()
+    if getattr(args, "neg_fa", False):
+        return run_neg_fa(args)
     norm_ver = _decode_tag(args)
 
     ve_out = (args.ve_out or default_ve_out()).resolve()
@@ -737,6 +808,7 @@ def main() -> int:
         "presence_thr": thr, "rr": rr, "limit": args.limit, "fake_asr": args.fake_asr,
         "dtype": args.dtype, "batch": args.batch, "max_new_tokens": args.max_new_tokens,
         "language": args.language, "domain_context": bool(args.domain_context),
+        "hotwords": bool(getattr(args, "hotwords", False)),
         "retry_mismatch": bool(args.retry_mismatch),
         "elapsed_sec": round(time.time() - t0, 2), "ve_out": str(ve_out),
         "n_written": len(ordered),

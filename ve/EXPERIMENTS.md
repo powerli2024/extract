@@ -104,7 +104,18 @@ P5（换 ASR 模型）：不排期。
 
 ## T1–T4 下一刀（不改默认，直到真实 contest +0.005）
 
-入口脚本：`./run_next_lift.sh t1|t2|t3|t4`（须在 `/root/extract/ve`；根目录可用 `./ve.sh t1`）。一次只动一个因子。主看 **CER=1 桶** 与 `contest`，不要优化「啊/吧」粒子。
+入口脚本：`./run_next_lift.sh t0|t1|t1b|t2|t3|t4`（须在 `/root/extract/ve`）。一次只动一个因子。主看 **CER=1 桶** 与 `contest`。
+
+### T0 — 叠话加拒 / 冻结 τ（不重跑 ASR）
+
+同一 `asr_cer` jsonl 上离线叠 `len_and_nontask_gray`。先 holdout τ，再冻结 zh 0.29305 / en 0.357868。
+
+```bash
+VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t0
+# → reports/lift_overlay/holdout_text.md  locked_text.md
+```
+
+`n_need_asr>0` 时冻结 τ 新放行的 pos 仍按 CER=1，contest 偏保守。
 
 ### T1 — 同一 mix，只改 Qwen3 解码
 
@@ -122,6 +133,14 @@ ASR_LANGUAGE=Chinese ASR_DOMAIN_CONTEXT=1 ./run_asr_cer.sh --out-dir "$VE_OUT/re
 
 对照：`language=auto`（现状） vs `Chinese` vs `Chinese`+领域 context（**不用唤醒词**）。  
 **Go：** CER=1 接受桶下降且真实 contest ≥ 锁定 +0.005。
+
+### T1b — 热词表 context（推荐于 T1 指令句）
+
+Qwen3-ASR 官方 context 是 `Vocabulary: …`，不是「只转写那一句」。不强制 language。
+
+```bash
+VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1b
+```
 
 ### T2 — CMD 滑窗时间选择
 

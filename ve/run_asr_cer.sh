@@ -41,6 +41,7 @@ ASR_CLI=(
   --device "${DEVICE:-cuda:0}"
 )
 [[ -n "${ASR_LANGUAGE:-}" ]] && ASR_CLI+=(--language "$ASR_LANGUAGE")
+[[ "${ASR_HOTWORDS:-0}" == "1" ]] && ASR_CLI+=(--hotwords)
 [[ "${ASR_DOMAIN_CONTEXT:-0}" == "1" ]] && ASR_CLI+=(--domain-context)
 [[ "${ASR_RETRY_MISMATCH:-0}" == "1" ]] && ASR_CLI+=(--retry-mismatch)
 

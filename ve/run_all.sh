@@ -66,7 +66,8 @@ Presence 门控
   VETO_CAMP=1         灰区 camp 否决（只加拒）
   VETO_WINDOWS=1      灰区次优窗否决
   ASR_LANGUAGE        强制 Qwen3 language（如 Chinese）；空=自动
-  ASR_DOMAIN_CONTEXT=1  智能家居 context，不用唤醒词
+  ASR_HOTWORDS=1      Qwen3 热词表 context（推荐于指令式 domain）
+  ASR_DOMAIN_CONTEXT=1  智能家居指令 context，不用唤醒词
   ASR_RETRY_MISMATCH=1  hyp 与时长不匹配时二次解码，回退 mix
   HOLDOUT_SEED        holdout 随机种子；默认 0
   ASNORM              1=AS-Norm（需 cohort）
@@ -431,6 +432,7 @@ else
     ASR_ARGS+=(--model-dir "${ASR_MODEL_DIR:-$QWEN3_ASR_DIR}")
   [[ "$LIMIT" != "0" ]] && ASR_ARGS+=(--limit "$LIMIT")
   [[ -n "${ASR_LANGUAGE:-}" ]] && ASR_ARGS+=(--language "$ASR_LANGUAGE")
+  [[ "${ASR_HOTWORDS:-0}" == "1" ]] && ASR_ARGS+=(--hotwords)
   [[ "${ASR_DOMAIN_CONTEXT:-0}" == "1" ]] && ASR_ARGS+=(--domain-context)
   [[ "${ASR_RETRY_MISMATCH:-0}" == "1" ]] && ASR_ARGS+=(--retry-mismatch)
   "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" "${ASR_ARGS[@]}" \

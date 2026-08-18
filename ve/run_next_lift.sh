@@ -2,8 +2,12 @@
 # 下一刀入口（不改默认提交）。一次只动一个因子。
 # 验收：真实 contest / RR / CER_total，并看 CER=1 桶。
 #
+# T0 冻结 τ + 叠话长句加拒（不重跑 ASR）:
+#   ./run_next_lift.sh t0
 # T1 解码（同一 mix 门控与波形）:
 #   ./run_next_lift.sh t1
+# T1b 热词 context（Qwen3 Vocabulary，不是指令）:
+#   ./run_next_lift.sh t1b
 # T2 滑窗（须 FORCE_CALIB，另开 VE_OUT）:
 #   ./run_next_lift.sh t2
 # T3 时长不匹配二次解码（叠在已有 mix 提取上）:
@@ -85,6 +89,31 @@ require_mix_out() {
   exit 2
 }
 
+t0() {
+  local ve
+  ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
+  echo "=== T0 叠话加拒 overlay  VE_OUT=$ve ==="
+  local asr="${ve}/reports/asr_cer/asr_results.jsonl"
+  if [[ ! -f "$asr" ]]; then
+    echo "[ERR] 需要已有 $asr （先跑完 mix 的 asr_cer）" >&2
+    exit 2
+  fi
+  if [[ "${SKIP_NEG_ASR:-0}" != "1" ]]; then
+    echo "[arm] ASR 过门 neg（叠话加拒打在 FA 长 hyp 上）"
+    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+      --ve-out "$ve" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE" \
+      --neg-fa --out-dir "${ve}/reports/asr_neg_fa"
+  fi
+  echo "[arm] holdout τ + 文本加拒（--no-camp）"
+  "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" \
+    --ve-out "$ve" --asr-pos "$asr" --no-camp --tag holdout_text
+  echo "[arm] 冻结锁定 τ + 文本加拒"
+  "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" \
+    --ve-out "$ve" --asr-pos "$asr" --no-camp --locked-thr --tag locked_text
+  echo "看 $ve/reports/lift_overlay/holdout_text.md 与 locked_text.md"
+  echo "n_need_asr>0 时冻结 τ 新放行的 pos 尚未 ASR，contest 偏保守"
+}
+
 t1() {
   local ve
   ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
@@ -108,6 +137,19 @@ t1() {
     --out "${ve}/reports/t1_eval.json" || true
   echo "对比: $ve/reports/asr_cer/summary.md vs asr_cer_zh vs asr_cer_zh_domain"
   echo "主看 n_cer1_accepted 与 contest_score_new"
+}
+
+t1b() {
+  local ve
+  ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
+  echo "=== T1b hotword context  VE_OUT=$ve ==="
+  OUT="${ve}/reports/asr_cer_hotwords"
+  mkdir -p "$OUT"
+  "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+    --ve-out "$ve" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE" \
+    --hotwords --out-dir "$OUT"
+  echo "对比: $ve/reports/asr_cer/summary.md vs asr_cer_hotwords vs asr_cer_zh_domain"
+  echo "主看 CER=1 桶；泄漏: grep -c 'Vocabulary:' $OUT/asr_results.jsonl"
 }
 
 t2() {
@@ -142,17 +184,19 @@ t4() {
 }
 
 case "$cmd" in
+  t0) t0 ;;
   t1) t1 ;;
+  t1b) t1b ;;
   t2) t2 ;;
   t3) t3 ;;
   t4) t4 ;;
   all)
     t4
-    echo "T1/T2/T3 需 AutoDL 上的 mix 提取 + Qwen3；先 t4 离线，再 t1。"
+    echo "T0 不需 GPU；T1/T1b/T2/T3 需 mix 提取 + Qwen3。"
     ;;
   help|-h|--help|*)
-    sed -n '2,16p' "$0"
-    echo "用法: $0 t1|t2|t3|t4|all"
+    sed -n '2,20p' "$0"
+    echo "用法: $0 t0|t1|t1b|t2|t3|t4|all"
     exit 0
     ;;
 esac

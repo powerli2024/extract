@@ -11,10 +11,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
-
 PUNCT = str.maketrans("", "", "，。！？、；：\"\"''「」『』（）【】《》…·—–-.,!?;:\"'`")
 DIGIT = re.compile(r"\d|[零一二两三四五六七八九十百千万半]")
 
@@ -423,6 +419,10 @@ def main() -> int:
     )
 
     # ---- xlsx ----
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
     wb = Workbook()
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(color="FFFFFF", bold=True)
