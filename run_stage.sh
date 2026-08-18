@@ -4,7 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$ROOT/scripts"
-MEDIA="$(cd "$ROOT/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/paths_defaults.sh"
 
 # 尽早修 OMP，避免任何 python 启动前 libgomp 报警
 if [[ -z "${OMP_NUM_THREADS:-}" || ! "${OMP_NUM_THREADS}" =~ ^[0-9]+$ || "${OMP_NUM_THREADS}" -le 0 ]]; then
@@ -25,45 +26,6 @@ if [[ -f "${VB_DIR:-/root/VB}/.env_clearvoice" ]]; then
   source "${VB_DIR:-/root/VB}/.env_clearvoice" || true
 fi
 export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/ClearerVoice-Studio}"
-
-# AutoDL：大文件默认数据盘；未迁移时仍回退 /root/*
-if [[ -d /root/autodl-tmp ]]; then
-  [[ -f /root/autodl-tmp/env_paths.sh ]] && source /root/autodl-tmp/env_paths.sh || true
-  [[ -f "$ROOT/.runtime/autodl_tmp_paths.sh" ]] && source "$ROOT/.runtime/autodl_tmp_paths.sh" || true
-  export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
-  if [[ -z "${MOSS_CKPT_DIR:-}" ]]; then
-    if [[ -f /root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx \
-       || -f /root/autodl-tmp/checkpoints/MossFormer2_SS_16K/last_best_checkpoint.pt ]]; then
-      export MOSS_CKPT_DIR=/root/autodl-tmp/checkpoints
-    elif [[ -d /root/checkpoints ]]; then
-      export MOSS_CKPT_DIR=/root/checkpoints
-    else
-      export MOSS_CKPT_DIR=/root/autodl-tmp/checkpoints
-    fi
-  fi
-  if [[ -z "${DATA_DIR:-}" ]]; then
-    if [[ -f /root/autodl-tmp/datasetA/pos.jsonl || -d /root/autodl-tmp/datasetA ]]; then
-      export DATA_DIR=/root/autodl-tmp/datasetA
-    else
-      export DATA_DIR=/root/datasetA
-    fi
-  fi
-  if [[ -z "${ASR_MODEL_DIR:-}" ]]; then
-    if [[ -d /root/autodl-tmp/Qwen3-ASR-1.7B ]]; then
-      export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-    else
-      export ASR_MODEL_DIR=/root/Qwen3-ASR-1.7B
-    fi
-  fi
-  export HF_HOME="${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
-  export TORCH_HOME="${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
-  export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/root/autodl-tmp/cache/pip}"
-else
-  export VM_OUT="${VM_OUT:-$MEDIA/vm_out}"
-  export MOSS_CKPT_DIR="${MOSS_CKPT_DIR:-/root/checkpoints}"
-  export DATA_DIR="${DATA_DIR:-/root/datasetA}"
-  export ASR_MODEL_DIR="${ASR_MODEL_DIR:-/root/Qwen3-ASR-1.7B}"
-fi
 
 # 无效 CLEARVOICE_PYTHON 会阻断 ClearVoice：仅保留真实存在的路径
 if [[ -n "${CLEARVOICE_PYTHON:-}" && ! -x "${CLEARVOICE_PYTHON}" ]]; then

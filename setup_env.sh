@@ -4,6 +4,8 @@
 #   torch / torchaudio / onnxruntime-gpu / qwen-asr / 轻量依赖
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/paths_defaults.sh"
 
 echo "============================================"
 echo " VM setup_env (install)"
@@ -28,29 +30,7 @@ if [[ -z "${CLEARVOICE_PYTHON:-}" ]]; then
     if [[ -x "$c" ]]; then export CLEARVOICE_PYTHON="$c"; break; fi
   done
 fi
-if [[ -d /root/autodl-tmp ]]; then
-  export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
-  export MOSS_CKPT_DIR="${MOSS_CKPT_DIR:-/root/autodl-tmp/checkpoints}"
-  export DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-  if [[ -z "${ASR_MODEL_DIR:-}" ]]; then
-    if [[ -d /root/autodl-tmp/Qwen3-ASR-1.7B ]]; then
-      export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-    elif [[ -d /root/Qwen3-ASR-1.7B ]]; then
-      export ASR_MODEL_DIR=/root/Qwen3-ASR-1.7B
-    else
-      export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-    fi
-  fi
-  export HF_HOME="${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
-  export TORCH_HOME="${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
-  export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/root/autodl-tmp/cache/pip}"
-  mkdir -p "$HF_HOME" "$TORCH_HOME" "$PIP_CACHE_DIR"
-else
-  export VM_OUT="${VM_OUT:-$ROOT/../vm_out}"
-  export MOSS_CKPT_DIR="${MOSS_CKPT_DIR:-/root/checkpoints}"
-  export DATA_DIR="${DATA_DIR:-/root/datasetA}"
-  export ASR_MODEL_DIR="${ASR_MODEL_DIR:-/root/Qwen3-ASR-1.7B}"
-fi
+mkdir -p "${HF_HOME:-/tmp}" "${TORCH_HOME:-/tmp}" "${PIP_CACHE_DIR:-/tmp}" 2>/dev/null || true
 
 ENV_NAME="${VM_CONDA_ENV:-qwen3-asr}"
 PY_VER="${VM_PYTHON_VERSION:-3.12}"

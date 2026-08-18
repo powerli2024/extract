@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# 下载 MossFormer2_SS_16K → <VB上级>/checkpoints/MossFormer2_SS_16K/last_best_checkpoint.pt
-# 默认不落在 VB/ 内
-#
-# 优先 wget/curl 直连 HuggingFace（避开 huggingface-cli / xet 401）
-# 网络: 先 source /etc/network_turbo
+# 内部脚本：下载 MossFormer2_SS_16K。请用仓库根目录 ./download_models.sh
+# 输出: $MOSS_CKPT_DIR/MossFormer2_SS_16K/last_best_checkpoint.pt
+# 国内默认 ModelScope，失败再 HuggingFace。
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA_ROOT="$(cd "$PROJECT_DIR/.." && pwd)"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/paths_defaults.sh"
 MODEL="${MODEL:-MossFormer2_SS_16K}"
-# 权重在 VB 外: ../checkpoints/MossFormer2_SS_16K/
-OUT_DIR="${OUT_DIR:-$MEDIA_ROOT/checkpoints/$MODEL}"
+OUT_DIR="${OUT_DIR:-$MOSS_SS_DIR}"
 HF_REPO="${HF_REPO:-alibabasglab/$MODEL}"
-# 直链（resolve/main，不走 xet CLI）
 HF_URL="${HF_URL:-https://huggingface.co/${HF_REPO}/resolve/main/last_best_checkpoint.pt}"
 MS_URL="${MS_URL:-https://www.modelscope.cn/models/iic/ClearerVoice-Studio/resolve/master/clearvoice/checkpoints/${MODEL}/last_best_checkpoint.pt}"
 
@@ -93,13 +90,13 @@ download_url() {
   fi
 }
 
-# 1) HuggingFace 直链
-if download_url "$HF_URL" "$TMP"; then
+# 1) ModelScope（国内默认） 2) HuggingFace
+if download_url "$MS_URL" "$TMP"; then
   :
 else
-  log_warn "HuggingFace 失败，尝试 ModelScope"
+  log_warn "ModelScope 失败，尝试 HuggingFace"
   rm -f "$TMP"
-  download_url "$MS_URL" "$TMP" || true
+  download_url "$HF_URL" "$TMP" || true
 fi
 
 sz="$(file_size "$TMP")"

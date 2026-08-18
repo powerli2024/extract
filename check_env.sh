@@ -2,7 +2,8 @@
 # 只检查、不安装。退出码：0=可用，1=有硬错误，2=有警告但仍可尝试跑部分阶段。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA="$(cd "$ROOT/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/paths_defaults.sh"
 
 HARD=0
 WARN=0
@@ -33,26 +34,6 @@ if [[ -z "${CLEARVOICE_PYTHON:-}" ]]; then
   do
     if [[ -x "$c" ]]; then export CLEARVOICE_PYTHON="$c"; break; fi
   done
-fi
-if [[ -d /root/autodl-tmp ]]; then
-  [[ -f /root/autodl-tmp/env_paths.sh ]] && source /root/autodl-tmp/env_paths.sh || true
-  export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
-  export MOSS_CKPT_DIR="${MOSS_CKPT_DIR:-/root/autodl-tmp/checkpoints}"
-  export DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-  if [[ -z "${ASR_MODEL_DIR:-}" ]]; then
-    if [[ -d /root/autodl-tmp/Qwen3-ASR-1.7B ]]; then
-      export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-    elif [[ -d /root/Qwen3-ASR-1.7B ]]; then
-      export ASR_MODEL_DIR=/root/Qwen3-ASR-1.7B
-    else
-      export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-    fi
-  fi
-else
-  export VM_OUT="${VM_OUT:-$ROOT/../vm_out}"
-  export MOSS_CKPT_DIR="${MOSS_CKPT_DIR:-/root/checkpoints}"
-  export DATA_DIR="${DATA_DIR:-/root/datasetA}"
-  export ASR_MODEL_DIR="${ASR_MODEL_DIR:-/root/Qwen3-ASR-1.7B}"
 fi
 
 if [[ -f "$ROOT/.runtime/env.sh" ]]; then
@@ -146,11 +127,14 @@ done
 [[ -f "$ROOT/download_mossformer2_onnx.sh" ]] && ok "download_mossformer2_onnx.sh" || warn "缺少 ONNX 下载脚本"
 
 echo "--- 权重 ---"
+ok "MOSS_CKPT_DIR=$MOSS_CKPT_DIR"
+ok "ASR_MODEL_DIR=$ASR_MODEL_DIR"
 onnx_found=""
 for c in \
   "${MOSS_ONNX_PATH:-}" \
   "$MOSS_CKPT_DIR/MossFormer2_ONNX/simple_model.onnx" \
-  /root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx
+  /root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx \
+  /root/checkpoints/MossFormer2_ONNX/simple_model.onnx
 do
   if [[ -n "$c" && -f "$c" ]]; then onnx_found="$c"; break; fi
 done

@@ -3,7 +3,8 @@
 # 环境: ./setup_env.sh && ./download_models.sh && ./check_env.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA="$(cd "$ROOT/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/paths_defaults.sh"
 
 STAGES_DEFAULT="collect,s1,s2,s3,s4,s5,s6,s7,s8,compare,eval,analyze"
 STAGES="$STAGES_DEFAULT"
@@ -29,12 +30,6 @@ if [[ -f "${VB_DIR:-/root/VB}/.env_clearvoice" ]]; then
   # shellcheck disable=SC1090
   source "${VB_DIR:-/root/VB}/.env_clearvoice" || true
 fi
-if [[ -d /root/autodl-tmp ]]; then
-  export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
-else
-  export VM_OUT="${VM_OUT:-$MEDIA/vm_out}"
-fi
-export DATA_DIR="${DATA_DIR:-/root/datasetA}"
 export SPLITS
 
 if [[ "${VM_ALLOW_DOWNLOAD:-0}" != "1" ]]; then

@@ -11,8 +11,8 @@
 ```bash
 # 1) 拉代码
 cd /root
-git clone https://github.com/powerli2024/extract.git VM
-cd /root/VM && chmod +x *.sh
+git clone https://github.com/powerli2024/extract.git extract
+cd /root/extract && chmod +x *.sh
 
 # 2) 数据盘路径（有 autodl-tmp 时脚本会自动用这些默认值）
 export DATA_DIR=/root/autodl-tmp/datasetA
@@ -27,11 +27,9 @@ export PIP_CACHE_DIR=/root/autodl-tmp/cache/pip
 ./setup_env.sh
 source ./env.sh
 
-# 4) 分离权重（ONNX + ClearVoice .pt）；ASR 需自行放到 ASR_MODEL_DIR
-./download_models.sh
-# 若权重/数据还在系统盘:
-#   bash migrate_to_autodl_tmp.sh --dry-run
-#   bash migrate_to_autodl_tmp.sh && source /root/autodl-tmp/env_paths.sh
+# 4) 权重：只跑这一个入口（不要单独跑 download_mossformer2_*.sh）
+./download_models.sh            # ONNX + ClearVoice .pt → $MOSS_CKPT_DIR
+# ./download_models.sh --asr    # 可选，拉 Qwen3-ASR-1.7B（很大）
 
 # 5) 只读检查后试跑
 ./check_env.sh
@@ -42,8 +40,13 @@ source ./env.sh
 日常更新代码（不碰数据/权重）：
 
 ```bash
-cd /root/VM && git pull --ff-only
+cd /root/extract   # 若 clone 到 VM 则 cd /root/VM
+chmod +x update.sh && ./update.sh
+# 若仍提示 would be overwritten: ./update.sh --hard
+./setup_env.sh
 ```
+
+`git pull` 若报 `Your local changes ... setup_env.sh would be overwritten`，说明本地改过脚本、**新版拉不下来**，跑的仍是旧逻辑（例如先打阿里云 pytorch-wheels）。应先更新代码，不要在这种状态下继续 `./setup_env.sh`。
 
 | 必须自备 | 路径示例 | 说明 |
 |----------|----------|------|
@@ -62,6 +65,34 @@ conda activate qwen3-asr && pip install -r requirements-optional.txt
 # conda activate ClearerVoice-Studio && pip install clearvoice torch torchaudio
 export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python
 ```
+
+## 权重（只认这一套路径）
+
+AutoDL 上全部落在数据盘，**不要写 `/root/checkpoints`**（系统盘会满）。
+
+```text
+/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx     # s1/s3/s6
+/root/autodl-tmp/checkpoints/MossFormer2_SS_16K/last_best_checkpoint.pt  # s2/s4/s5/s7/s8
+/root/autodl-tmp/Qwen3-ASR-1.7B/                                    # ASR，加 --asr 才下载
+```
+
+| 做什么 | 命令 |
+|--------|------|
+| 下载分离权重 | `./download_models.sh` |
+| 只要 ONNX | `./download_models.sh --onnx-only` |
+| 只要 ClearVoice | `./download_models.sh --ss-only` |
+| 额外拉 ASR | `./download_models.sh --asr` |
+| 检查是否齐全 | `./check_env.sh` |
+
+旧脚本若已经下到 `/root/checkpoints`，迁到数据盘：
+
+```bash
+cd /root/extract
+bash migrate_to_autodl_tmp.sh
+source /root/autodl-tmp/env_paths.sh
+```
+
+`download_mossformer2_ss.sh` / `download_mossformer2_onnx.sh` 是内部脚本，不要单独跑。
 
 ## 脚本分层
 

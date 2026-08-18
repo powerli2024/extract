@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
-# 下载 MossFormer2 ONNX 模型 → <VB上级>/checkpoints/MossFormer2_ONNX/simple_model.onnx
-#
+# 内部脚本：下载 MossFormer2 ONNX。请用仓库根目录 ./download_models.sh
+# 输出: $MOSS_CKPT_DIR/MossFormer2_ONNX/simple_model.onnx
 # 来源: ModelScope dengcunqin/speech_mossformer2_separation_temporal_16k
-#
-# 默认不落在 VB_onnx/ 内。
-#
-# 用法:
-#   cd VB_onnx && ./download_mossformer2_onnx.sh
-#   # 自定义输出:
-#   OUT_DIR=/path/to/models ./download_mossformer2_onnx.sh
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIA_ROOT="$(cd "$PROJECT_DIR/.." && pwd)"
+# shellcheck disable=SC1091
+source "$PROJECT_DIR/paths_defaults.sh"
 MODEL_NAME="MossFormer2_ONNX"
-OUT_DIR="${OUT_DIR:-$MEDIA_ROOT/checkpoints/$MODEL_NAME}"
+OUT_DIR="${OUT_DIR:-$MOSS_CKPT_DIR/$MODEL_NAME}"
 
 # ModelScope 直链（resolve/master，无需 git-lfs）
 MS_URL="${MS_URL:-https://www.modelscope.cn/models/dengcunqin/speech_mossformer2_separation_temporal_16k/resolve/master/simple_model.onnx}"

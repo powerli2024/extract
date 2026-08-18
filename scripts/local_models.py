@@ -21,7 +21,16 @@ def enable_offline_env() -> None:
 
 
 def _hint() -> str:
-    return "请先单独运行: cd VM && ./download_models.sh （运行脚本不会自动下载）"
+    return "请先单独运行: ./download_models.sh （运行脚本不会自动下载）"
+
+
+def _default_ckpt_dir() -> Path:
+    raw = os.environ.get("MOSS_CKPT_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    if Path("/root/autodl-tmp").is_dir():
+        return Path("/root/autodl-tmp/checkpoints")
+    return Path("/root/checkpoints")
 
 
 def resolve_onnx_local() -> Path:
@@ -32,11 +41,12 @@ def resolve_onnx_local() -> Path:
         cands.append(p if p.suffix else p / "simple_model.onnx")
         if p.is_dir():
             cands.append(p / "simple_model.onnx")
-    ckpt = Path(os.environ.get("MOSS_CKPT_DIR", "/root/checkpoints")).expanduser()
+    ckpt = _default_ckpt_dir()
     media = media_root()
     cands += [
         ckpt / "MossFormer2_ONNX" / "simple_model.onnx",
         Path("/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx"),
+        Path("/root/checkpoints/MossFormer2_ONNX/simple_model.onnx"),
         media / "checkpoints" / "MossFormer2_ONNX" / "simple_model.onnx",
     ]
     for c in cands:
@@ -49,11 +59,12 @@ def resolve_onnx_local() -> Path:
 
 
 def resolve_cv_ckpt_local(model_name: str = "MossFormer2_SS_16K") -> Path:
-    ckpt = Path(os.environ.get("MOSS_CKPT_DIR", "/root/checkpoints")).expanduser()
+    ckpt = _default_ckpt_dir()
     media = media_root()
     cands = [
         ckpt / model_name / "last_best_checkpoint.pt",
         Path("/root/autodl-tmp/checkpoints") / model_name / "last_best_checkpoint.pt",
+        Path("/root/checkpoints") / model_name / "last_best_checkpoint.pt",
         media / "checkpoints" / model_name / "last_best_checkpoint.pt",
     ]
     for c in cands:
@@ -74,9 +85,9 @@ def resolve_asr_local(model_dir: str | None = None) -> Path:
         if v:
             cands.append(Path(v).expanduser())
     cands += [
+        Path("/root/autodl-tmp/Qwen3-ASR-1.7B"),
         Path("/root/Qwen3-ASR-1.7B"),
         media_root() / "Qwen3-ASR-1.7B",
-        Path("/root/autodl-tmp/Qwen3-ASR-1.7B"),
     ]
     for c in cands:
         try:
