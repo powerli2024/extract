@@ -140,31 +140,68 @@ sys.exit(0)
 PY
 }
 
+maybe_network_turbo() {
+  # AutoDL 学术加速：对 download.pytorch.org / HuggingFace 有效
+  if [[ -f /etc/network_turbo ]]; then
+    # shellcheck disable=SC1091
+    source /etc/network_turbo || true
+    echo "[INFO] 已 source /etc/network_turbo"
+  fi
+}
+
+torch_cuda_ok() {
+  "$PYTHON_BIN" - <<'PY'
+import torch, torchaudio  # noqa: F401
+import os, sys
+want_gpu = os.environ.get("_VM_WANT_GPU", "1") == "1"
+if want_gpu and not torch.cuda.is_available():
+    sys.exit(2)
+print(f"torch={torch.__version__} cuda={torch.cuda.is_available()}")
+PY
+}
+
 install_torch_stack() {
   local tag="$1"
   echo "[INFO] 安装 torch / torchaudio （tag=$tag）..."
+  maybe_network_turbo
+  export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
+
   if [[ "$tag" == "cpu" ]]; then
-    "$PYTHON_BIN" -m pip install -U torch torchaudio "${PIP_MIRROR[@]}" \
-      || "$PYTHON_BIN" -m pip install -U torch torchaudio
+    "$PYTHON_BIN" -m pip install torch torchaudio "${PIP_MIRROR[@]}" \
+      || "$PYTHON_BIN" -m pip install torch torchaudio
     return
   fi
-  local indexes=(
-    "https://mirrors.aliyun.com/pytorch-wheels/${tag}"
+
+  # 国内 pytorch-wheels 镜像经常没有 PEP 503 完整索引 → "from versions: none"
+  # 官方 CUDA 索引必须用 --index-url（不能先走阿里云）。可用 TORCH_INDEX 覆盖。
+  local indexes=()
+  if [[ -n "${TORCH_INDEX:-}" ]]; then
+    indexes+=("$TORCH_INDEX")
+  fi
+  indexes+=(
     "https://download.pytorch.org/whl/${tag}"
+    "https://mirror.sjtu.edu.cn/pytorch-wheels/${tag}"
+    "https://mirrors.aliyun.com/pytorch-wheels/${tag}"
   )
+
   local ok=0
   local idx
   for idx in "${indexes[@]}"; do
     echo "[INFO] try: pip install torch torchaudio --index-url $idx"
-    if "$PYTHON_BIN" -m pip install -U torch torchaudio --index-url "$idx"; then
-      ok=1
-      break
+    if "$PYTHON_BIN" -m pip install torch torchaudio --index-url "$idx"; then
+      export _VM_WANT_GPU=1
+      if torch_cuda_ok; then
+        ok=1
+        break
+      fi
+      echo "[WARN] 该源装上了 torch，但 cuda 不可用，试下一个源"
+    else
+      echo "[WARN] 来源失败（常见于阿里云/交大 pytorch-wheels 无 cp312+${tag} 索引）: $idx"
     fi
-    echo "[WARN] 来源失败: $idx"
   done
   if [[ "$ok" -ne 1 ]]; then
-    echo "[WARN] 专用 CUDA wheel 失败，回退清华源（可能是 CPU 版）..."
-    "$PYTHON_BIN" -m pip install -U torch torchaudio "${PIP_MIRROR[@]}" || true
+    echo "[WARN] 专用 CUDA wheel 失败，回退清华源（可能是 CPU 版，仅应急）..."
+    "$PYTHON_BIN" -m pip install torch torchaudio "${PIP_MIRROR[@]}" || true
   fi
 }
 
@@ -186,7 +223,9 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
 
+maybe_network_turbo
 echo "[INFO] pip upgrade ..."
+export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
 "$PYTHON_BIN" -m pip install -U pip setuptools wheel "${PIP_MIRROR[@]}" >/dev/null || true
 
 # 1) torch / torchaudio（ASR + 通用 CUDA）
@@ -202,10 +241,11 @@ else
   echo "[ OK ] torch / torchaudio 已可用"
 fi
 
-# 1.5) pip 自带的 CUDA 运行库（给 onnxruntime-gpu 找 libcublasLt.so.12）
+# 1.5) 补齐 nvidia CUDA pip 库（ORT 找 libcublasLt.so.12）
+# 禁止 pip -U：torch 2.6+cu124 钉死 12.4.127，-U 会升到 12.6 导致版本冲突
 if [[ "$TORCH_TAG" != "cpu" ]]; then
-  echo "[INFO] 安装/补齐 nvidia CUDA pip 库（ORT 需要 cublas/cufft/cudnn）..."
-  "$PYTHON_BIN" -m pip install -U \
+  echo "[INFO] 补齐 nvidia CUDA pip 库（不升级，避免盖掉 torch 钉死的 12.4.x）..."
+  "$PYTHON_BIN" -m pip install \
     nvidia-cublas-cu12 \
     nvidia-cufft-cu12 \
     nvidia-cudnn-cu12 \
