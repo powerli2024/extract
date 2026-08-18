@@ -1,0 +1,27 @@
+# VM runtime / local artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+*.tar.gz
+.runtime/
+.python_bin
+env.sh
+.DS_Store
+
+# data / weights / outputs (never commit)
+checkpoints/
+models/
+datasetA/
+vm_out/
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.wav
+*.flac
+*.mp3
+*.tar
+*.zip

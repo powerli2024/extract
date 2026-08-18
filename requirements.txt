@@ -1,0 +1,34 @@
+# VM 主环境（conda env: qwen3-asr, Python 3.12）
+# 安装入口: ./setup_env.sh （会装 CUDA 版 torch + 本文件）
+# 也可: pip install -r requirements.txt
+#
+# 不在本文件的 GPU 栈（由 setup_env.sh 按 nvidia-smi 选 cu124/cu121）:
+#   torch, torchaudio, onnxruntime-gpu, nvidia-*-cu12
+
+# --- 音频 / 数值 ---
+numpy>=1.24
+scipy>=1.11
+soxr>=0.3.7
+soundfile>=0.12
+librosa>=0.10
+audioread>=3.0
+
+# --- CER ---
+editdistance>=0.6
+pypinyin>=0.49
+
+# --- 进度 / 工具 ---
+tqdm>=4.66
+packaging>=23.0
+
+# --- ONNX 分离（CPU 回退；GPU 请装 onnxruntime-gpu，见 setup_env.sh）---
+# 勿与 onnxruntime-gpu 同时装 CPU 包。GPU 机器由 setup_env 负责。
+# onnxruntime>=1.17
+
+# --- ASR（会拉取 transformers / accelerate / qwen-omni-utils 等）---
+qwen-asr>=0.0.6
+huggingface_hub>=0.24
+sentencepiece>=0.2.0
+protobuf>=4.25
+safetensors>=0.4
+einops>=0.7

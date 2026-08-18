@@ -1,0 +1,188 @@
+# VM — 全量分离 8 组实验（pos / neg 分树）
+
+**自包含流水线**：分离 / ASR 后端代码已整合进 `VM/scripts/`，AutoDL 上只需部署本目录 + 数据 + 权重，**不必再旁路挂载 VB / VB_onnx**。
+
+代码仓库：https://github.com/powerli2024/extract.git
+
+## 部署（Git clone → AutoDL）
+
+系统盘仅约 30G：**数据、权重、输出必须放 `/root/autodl-tmp`**。代码本身很小，可放 `/root/extract`。
+
+```bash
+# 1) 拉代码
+cd /root
+git clone https://github.com/powerli2024/extract.git VM
+cd /root/VM && chmod +x *.sh
+
+# 2) 数据盘路径（有 autodl-tmp 时脚本会自动用这些默认值）
+export DATA_DIR=/root/autodl-tmp/datasetA
+export VM_OUT=/root/autodl-tmp/vm
+export MOSS_CKPT_DIR=/root/autodl-tmp/checkpoints
+export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
+export HF_HOME=/root/autodl-tmp/cache/huggingface
+export TORCH_HOME=/root/autodl-tmp/cache/torch
+export PIP_CACHE_DIR=/root/autodl-tmp/cache/pip
+
+# 3) Python 依赖（torch CUDA wheel + requirements.txt）
+./setup_env.sh                 # 创建 conda env qwen3-asr
+source ./env.sh
+
+# 4) 分离权重（ONNX + ClearVoice .pt）；ASR 需自行放到 ASR_MODEL_DIR
+./download_models.sh
+# 若权重/数据还在系统盘:
+#   bash migrate_to_autodl_tmp.sh --dry-run
+#   bash migrate_to_autodl_tmp.sh && source /root/autodl-tmp/env_paths.sh
+
+# 5) 只读检查后试跑
+./check_env.sh
+./run_all.sh --limit 20
+./run_all.sh
+```
+
+日常更新代码（不碰数据/权重）：
+
+```bash
+cd /root/VM && git pull --ff-only
+```
+
+| 必须自备 | 路径示例 | 说明 |
+|----------|----------|------|
+| `datasetA/{pos,neg}.jsonl` + `{pos,neg}/kws_*.wav` | `$DATA_DIR` | 本仓不包含数据 |
+| Qwen3-ASR-1.7B | `$ASR_MODEL_DIR` | 体积大，不自动下载 |
+| MossFormer2 ONNX / ClearVoice `.pt` | `$MOSS_CKPT_DIR` | `./download_models.sh` |
+| GPU + conda | AutoDL 镜像自带 | Python 3.12 环境名 `qwen3-asr` |
+
+ClearVoice 阶段（s2/s4/s5/s7/s8）额外：
+
+```bash
+# 推荐装进同一 qwen3-asr，避免双环境
+conda activate qwen3-asr && pip install -r requirements-optional.txt
+# 或独立环境:
+# conda create -n ClearerVoice-Studio python=3.10 -y
+# conda activate ClearerVoice-Studio && pip install clearvoice torch torchaudio
+export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python
+```
+
+## 脚本分层
+
+| 脚本 | 职责 |
+|------|------|
+| `check_env.sh` | **只读检查**（不安装、不下载） |
+| `setup_env.sh` | **搭建**：pip、目录、环境快照 |
+| `download_models.sh` | **唯一下载入口**（调用本包 `download_mossformer2_*.sh`） |
+| `run_stage.sh` / `run_all.sh` | **只跑实验**：默认离线，缺权重报错 |
+
+## 约定
+
+| 项 | 规则 |
+|----|------|
+| uid | **`{split}_{id}`**（jsonl 的 `id`；禁止行号） |
+| 数据 | `datasetA/{pos,neg}.jsonl`（id 唯一且与 `kws_{id}.wav` 一致） |
+| 输出树 | `$VM_OUT/pos/...` 与 `$VM_OUT/neg/...` **互不混写** |
+| 权重 | 仅 `./download_models.sh` 可下载；`run_*` 只读本地 |
+| CER | CJK=无调拼音；英文=字符；神谕=候选最低 CER |
+| 默认 splits | `pos,neg` |
+| 阈值 a/b/c | 该 split 第一轮神谕 CER 的 P50/P75/P90 |
+
+## 实验
+
+| 阶段 | 含义 |
+|------|------|
+| s1 | ONNX 全量一阶 |
+| s2 | ClearVoice 全量一阶 |
+| s3 | ONNX cascade（复用同 split s1） |
+| s4 | ClearVoice cascade（复用同 split s2） |
+| s5 | s1 分布门控 → ClearVoice 一阶（peak） |
+| s6 | s1 门控 → ONNX 二阶 |
+| s7 | s2 门控 → ONNX 二阶 |
+| s8 | s2 门控 → ClearVoice 二阶 |
+
+## AutoDL
+
+**大文件必须在数据盘** `/root/autodl-tmp`（系统盘仅 30G）。  
+流水线默认：`VM_OUT` / `MOSS_CKPT_DIR` / 缓存 → 数据盘；若模型还在 `/root/...`，先迁移：
+
+```bash
+cd /root/VM && chmod +x *.sh
+bash migrate_to_autodl_tmp.sh --dry-run   # 先看会迁什么
+bash migrate_to_autodl_tmp.sh             # 迁模型/数据，原路径留 symlink
+bash migrate_to_autodl_tmp.sh --also-caches
+source /root/autodl-tmp/env_paths.sh
+df -h / /root/autodl-tmp
+```
+
+```bash
+# 只需上传/放置 VM/ 本身（不必再放 VB、VB_onnx）
+cd /root/VM && chmod +x *.sh
+
+./setup_env.sh                 # 创建 qwen3-asr + torch/torchaudio/onnxruntime-gpu/qwen-asr
+./download_models.sh
+./check_env.sh
+
+source ./env.sh                # 或: conda activate qwen3-asr
+# 下列路径在 AutoDL 上默认已是 autodl-tmp；显式写出亦可
+export DATA_DIR=/root/autodl-tmp/datasetA
+export VM_OUT=/root/autodl-tmp/vm
+export MOSS_CKPT_DIR=/root/autodl-tmp/checkpoints
+export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B   # 或仍指向 /root 下的 symlink
+
+./run_all.sh --limit 20
+./run_all.sh
+
+# 从 s2 续跑（默认跳过已完成阶段，不覆盖 s1 等）
+./run_all.sh --stages s2,s3,s4,s5,s6,s7,s8,compare,eval
+
+# ClearVoice（s2/s4/s5/s7/s8 需要）
+conda create -n ClearerVoice-Studio python=3.10 -y
+conda activate ClearerVoice-Studio && pip install clearvoice
+export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python
+# 或在 qwen3-asr 内: pip install clearvoice
+
+# 强制重跑某阶段: --force 或 VM_FORCE=1
+# ONNX 吞吐: MOSS_NUM_SESSIONS=6 VM_SEP_BATCH=8（run_* 默认已设）
+
+# 结果分析（只读；完备性 / CER 排行 / 增益 / 失败补跑建议）
+./run_stage.sh analyze
+# → $VM_OUT/reports/analysis.md 与 analysis.json
+# 细分布仍用: ./run_stage.sh eval
+```
+
+`setup_env.sh` 会安装：`torch` `torchaudio` `onnxruntime-gpu` `nvidia-*-cu12`，以及 **`requirements.txt`**（`numpy` `scipy` `soxr` `librosa` `soundfile` `editdistance` `pypinyin` `tqdm` `qwen-asr` 及其传递依赖 `transformers`/`accelerate` 等）。  
+CUDA wheel 按 `nvidia-smi` 自动选 `cu124/cu121`；可覆盖：`TORCH_CUDA=cu124 ./setup_env.sh`。  
+已完成阶段默认跳过（`VM_SKIP_DONE=1`）；不会覆盖先前产物。
+
+
+## 包内已整合的代码
+
+```text
+VM/scripts/
+  utils_audio.py          # 音频 IO
+  cer_metrics.py          # ASR 文本归一化
+  asr_backend.py          # Qwen3-ASR
+  mossformer2_ss.py       # ClearVoice MossFormer2
+  mossformer2_onnx.py     # ONNX MossFormer2
+  stage_*.py / collect…   # 本实验编排
+VM/download_mossformer2_ss.sh
+VM/download_mossformer2_onnx.sh
+```
+
+## 仍需环境侧提供（不是另一份代码仓）
+
+| 项 | 说明 |
+|----|------|
+| 数据集 | `DATA_DIR`（如 `/root/datasetA`） |
+| 分离权重 | `MOSS_CKPT_DIR` 下 ONNX / ClearVoice `.pt`（`download_models.sh`） |
+| ASR 权重 | `ASR_MODEL_DIR`（需自行放置，体积大） |
+| ClearVoice 运行时 | 本机 `CLEARVOICE_PYTHON` 环境（pip 包 `clearvoice`，非 VB 源码） |
+| conda | `qwen3-asr`（跑 ASR + 主流程） |
+
+## 产出树
+
+```text
+$VM_OUT/
+  meta/collect_summary.json
+  pos/{meta,s1_…,s8_…,reports}/
+  neg/{meta,s1_…,s8_…,reports}/
+  reports/{compare_all,eval_report,analysis}.*
+  packs/vm_*.tar.gz
+```

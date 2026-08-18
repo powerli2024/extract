@@ -1,0 +1,6 @@
+# 可选，不装也能跑 s1/s3/s6（ONNX 一阶/级联/门控）
+# s2/s4/s5/s7/s8 需要 ClearVoice：
+clearvoice
+
+# FunASR Paraformer 回退（默认不用；主路径是 Qwen3-ASR）
+# funasr
