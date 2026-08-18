@@ -5,6 +5,31 @@
 
 校内标定集约 **contest ≈ 0.739**（n=1838：pos 1364 / neg 474）。
 
+提交开关（已写入 `run_all.sh` 默认）：
+
+- `LOCKED_THR=1`：zh 0.29305 / en 0.357868，**禁止 `FORCE_CALIB`**
+- `EXTRA_REJECT=1`：灰区长非任务句加拒，写出 `$VE_OUT/reports/submit/result.json`
+
+已有 `ve_mix_novad` 时不要重跑 Presence / pos ASR：
+
+```bash
+conda activate qwen3-asr
+cd /root/extract/ve
+VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
+# → reports/submit/result.json   contest 应 ≈ 0.7389
+```
+
+全新机器才走全量（仍不要 FORCE_CALIB）：
+
+```bash
+conda activate qwen3-asr
+cd /root/extract/ve
+ENROLL_VAD=0 PIPELINE=mix \
+PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
+LOCKED_THR=1 EXTRA_REJECT=1 \
+./run_all.sh
+```
+
 ## 运行时（AutoDL）
 
 环境清单见 [`SETUP.md`](SETUP.md)。问题口径与已否决方向见 [`PROBLEM.md`](PROBLEM.md)。分阶命令见 [`EXPERIMENTS.md`](EXPERIMENTS.md)。
@@ -17,16 +42,9 @@ chmod +x *.sh
 cp -n .env_ve.example .env_ve
 ./setup_env.sh && source .env_ve
 ONLY=eres2netv2 ./download_presence_encoders.sh
-./download_moss_onnx.sh          # Presence USE_SEP=1 需要
+./download_moss_onnx.sh
 PIPELINE=mix ./check_env.sh
-
-ENROLL_VAD=0 PIPELINE=mix \
-PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
-FORCE_CALIB=1 HOLDOUT_FRAC=0.3 \
-./run_all.sh
 ```
-
-下一刀（不改默认；须已有 mix 提取）：`VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1`
 
 | 开关 | 值 | 原因 |
 |------|----|------|
@@ -61,11 +79,6 @@ FORCE_CALIB=1 HOLDOUT_FRAC=0.3 \
 - 把 Presence 代理 contest（CER:=FRR）当成提交分
 - 换更大 ASR（P5 搁置）
 
-ASR 下一刀：`./run_next_lift.sh t1|t2|t3|t4`（见 [`EXPERIMENTS.md`](EXPERIMENTS.md) T1–T4）。未过门（真实 contest +0.005）前不改上表默认。
-
-- T1：同一 mix 上 `Chinese` / 领域 context（不用唤醒词）
-- T2：CMD 滑窗 max cosine，ASR 用 argmax 窗
-- T3：时长不匹配才二次解码，回退 mix
-- T4：灰区 camp/次优窗只否决不救援
+ASR 消融（T1–T4）已结：均未过锁定 +0.005。提交用 `./run_next_lift.sh submit`，不要再改上表默认。
 
 换更大 ASR（P5）仍搁置。

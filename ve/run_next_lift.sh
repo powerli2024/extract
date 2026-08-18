@@ -16,6 +16,8 @@
 #   ./run_next_lift.sh t3
 # T4 离线 camp 否决（本地可跑，用 sssss 标定）:
 #   ./run_next_lift.sh t4
+# 提交：冻结 τ + 叠话加拒 → reports/submit/result.json（不重跑 Presence）:
+#   VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 # 门控: 相对锁定 +0.005 才改默认。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -227,6 +229,28 @@ t4() {
   echo "Go: test_dC>=0.005 且 n_extra_pos<=5 才把 VETO_CAMP=1 接入 extract"
 }
 
+submit() {
+  local ve
+  ve="$(require_mix_out "${VE_OUT:-/root/autodl-tmp/ve_mix_novad}")"
+  echo "=== submit 冻结 τ + 叠话加拒  VE_OUT=$ve ==="
+  local asr="${ve}/reports/asr_cer/asr_results.jsonl"
+  if [[ ! -f "$asr" ]]; then
+    echo "[ERR] 需要已有 $asr" >&2
+    exit 2
+  fi
+  if [[ "${SKIP_NEG_ASR:-0}" != "1" ]]; then
+    echo "[arm] ASR 过门 neg"
+    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+      --ve-out "$ve" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE" \
+      --neg-fa --out-dir "${ve}/reports/asr_neg_fa"
+  fi
+  echo "[arm] locked τ + 文本加拒 → result.json"
+  "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" \
+    --ve-out "$ve" --asr-pos "$asr" --no-camp --locked-thr --write-result --tag submit
+  echo "提交文件: $ve/reports/submit/result.json"
+  echo "对照 T0 locked_text contest 应 ≈ 0.7389"
+}
+
 case "$cmd" in
   t0) t0 ;;
   t1) t1 ;;
@@ -235,13 +259,14 @@ case "$cmd" in
   t2b) t2b ;;
   t3) t3 ;;
   t4) t4 ;;
+  submit) submit ;;
   all)
     t4
     echo "T0 不需 GPU；T1/T1b/T2/T2b/T3 需 mix 提取 + Qwen3。"
     ;;
   help|-h|--help|*)
-    sed -n '2,22p' "$0"
-    echo "用法: $0 t0|t1|t1b|t2|t2b|t3|t4|all"
+    sed -n '2,24p' "$0"
+    echo "用法: $0 t0|t1|t1b|t2|t2b|t3|t4|submit|all"
     exit 0
     ;;
 esac

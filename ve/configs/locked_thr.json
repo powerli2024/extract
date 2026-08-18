@@ -1,0 +1,19 @@
+{
+  "presence_thr": 0.29305,
+  "thr_mode": "lang_split",
+  "thr_by_lang": {
+    "zh": 0.29305,
+    "en": 0.357868,
+    "default": 0.29305
+  },
+  "enroll_vad": false,
+  "enroll_vad_max_sec": 4.0,
+  "use_sep": true,
+  "sep_depth": 1,
+  "score_norm": "raw",
+  "backend": "eres2netv2",
+  "locked": true,
+  "source": "datasetA/sssss school-set (wake-lang split)",
+  "metric": "0.5*RR + 0.5*(1-CER)",
+  "note": "Submit τ. Do not FORCE_CALIB over this file. Extra-reject is applied after ASR."
+}

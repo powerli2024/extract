@@ -34,6 +34,75 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _row_id(r: dict[str, Any]) -> int | None:
+    if r.get("id") is not None:
+        try:
+            return int(r["id"])
+        except (TypeError, ValueError):
+            return None
+    uid = str(r.get("uid") or "")
+    if "_" in uid:
+        tail = uid.rsplit("_", 1)[-1]
+        if tail.isdigit():
+            return int(tail)
+    return None
+
+
+def overlay_reason(r: dict[str, Any], pred_fn) -> str:
+    if r.get("base_rej"):
+        return "speaker_absent"
+    if not pred_fn(r):
+        return ""
+    if extra_reject_text(r["score"], r["thr"], r.get("hyp")):
+        return "speaker_absent"
+    return "speaker_absent"
+
+
+def write_result_json(
+    path: Path,
+    rows: list[dict[str, Any]],
+    pred_fn,
+    metrics: dict[str, Any],
+) -> None:
+    """竞赛 pos 列表：拒识 content 空、cer=1；接受写 hyp。"""
+    pos = [r for r in rows if r.get("split") == "pos"]
+    pos.sort(key=lambda r: (_row_id(r) is None, _row_id(r) or 0, str(r.get("uid") or "")))
+    results = []
+    for r in pos:
+        rid = _row_id(r)
+        if rid is None:
+            continue
+        label = str(r.get("label") or r.get("cmd_text") or "")
+        if pred_fn(r):
+            results.append({"id": rid, "content": "", "label": label, "cer": 1.0})
+        else:
+            cer = r.get("cer")
+            results.append({
+                "id": rid,
+                "content": str(r.get("hyp") or ""),
+                "label": label,
+                "cer": 1.0 if cer is None else float(cer),
+            })
+    payload = {
+        "results": results,
+        "avg_cer": float(metrics["cer"]),
+        "avg_rr": float(metrics["rr"]),
+        "contest": float(metrics["contest"]),
+        "zh_thr": ZH_THR,
+        "en_thr": EN_THR,
+        "extra_reject": "len_and_nontask_gray",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="文本加拒 + camp/窗否决（只加拒）")
     p.add_argument("--ve-out", type=Path, default=None)
@@ -47,6 +116,9 @@ def main() -> int:
     p.add_argument("--no-text", action="store_true")
     p.add_argument("--no-camp", action="store_true")
     p.add_argument("--window-veto", action="store_true")
+    p.add_argument("--write-result", action="store_true",
+                   help="写出 reports/submit/result.json（竞赛 pos 列表）")
+    p.add_argument("--result-json", type=Path, default=None)
     args = p.parse_args()
 
     ve = (args.ve_out or default_ve_out()).resolve()
@@ -63,9 +135,14 @@ def main() -> int:
             if uid:
                 neg_hyp[uid] = r.get("asr_text") or r.get("hyp") or ""
     lang_of = {}
+    sample_meta: dict[str, dict[str, Any]] = {}
     if samples_path.is_file():
         for s in load_jsonl(samples_path):
-            lang_of[s.get("uid")] = s.get("lang") or "zh"
+            uid = s.get("uid")
+            if not uid:
+                continue
+            lang_of[uid] = s.get("lang") or "zh"
+            sample_meta[uid] = s
 
     def pack(r: dict[str, Any], split: str) -> dict[str, Any]:
         score = float(r.get("presence_score") or r.get("eres") or 0.0)
@@ -88,8 +165,10 @@ def main() -> int:
             cer = 1.0
         else:
             cer = r.get("cer")
+        sm = sample_meta.get(r.get("uid")) or {}
         return {
             "uid": r.get("uid"),
+            "id": r.get("id") if r.get("id") is not None else sm.get("id"),
             "split": split,
             "lang": lang,
             "cer": cer,
@@ -97,6 +176,8 @@ def main() -> int:
             "thr": thr,
             "file_thr": file_thr,
             "hyp": hyp,
+            "label": r.get("cmd_text") or r.get("label") or sm.get("cmd_text") or "",
+            "cmd_text": r.get("cmd_text") or sm.get("cmd_text") or "",
             "camp": None if camp is None else float(camp),
             "best_window_score": bw,
             "second_window_score": sw,
@@ -161,6 +242,27 @@ def main() -> int:
         "",
     ]
     (od / f"{tag}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    dump_rows = []
+    for r in rows:
+        rej = pred(r)
+        dump_rows.append({
+            "uid": r.get("uid"),
+            "id": r.get("id"),
+            "split": r.get("split"),
+            "lang": r.get("lang"),
+            "score": r.get("score"),
+            "thr": r.get("thr"),
+            "reject": rej,
+            "reject_reason": overlay_reason(r, pred) if rej else "",
+            "extra_reject": bool((not r["base_rej"]) and rej),
+            "hyp": r.get("hyp") or "",
+            "cer": 1.0 if (r.get("split") == "pos" and rej) else r.get("cer"),
+        })
+    write_jsonl(od / f"{tag}_rows.jsonl", dump_rows)
+    if args.write_result or tag == "submit":
+        rp = args.result_json or (ve / "reports" / "submit" / "result.json")
+        write_result_json(rp, rows, pred, m1)
+        print(f"[OK] result.json → {rp} contest={round(m1['contest'], 6)} RR={round(m1['rr'], 6)}")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print(f"[OK] {jp}")
     return 0

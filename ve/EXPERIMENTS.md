@@ -117,6 +117,13 @@ VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t0
 
 `n_need_asr>0` 时冻结 τ 新放行的 pos 仍按 CER=1，contest 偏保守。
 
+已有 mix 提取时导出提交文件（不重跑 pos ASR）：
+
+```bash
+VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
+# → $VE_OUT/reports/submit/result.json
+```
+
 ### T1 — 同一 mix，只改 Qwen3 解码
 
 固定锁定门控与提取波形。须先有 mix 提取（`samples.jsonl` + `all_results.jsonl`）。没有就先 `ENROLL_VAD=0 PIPELINE=mix … ./run_all.sh`。

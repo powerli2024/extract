@@ -56,8 +56,11 @@ Presence 门控
   USE_SEP             1=Presence 用一次分离 max-cosine（默认 1）
                       sep_route 强制为 1
   LANG_SPLIT          1=按 zh/en 分 thr（默认 1）
-  ENROLL_VAD          1=enroll 能量 VAD（默认 1）；0=关闭
+  ENROLL_VAD          1=enroll 能量 VAD；0=关闭。提交默认 0（LOCKED_THR=1 会强制 0）
                       → VE_OUT / 校准目录带 _vad 或 _novad，结果可并存
+  LOCKED_THR          1=用仓库冻结 τ（zh 0.29305 / en 0.357868），不扫 thr（默认 1）
+                      FORCE_CALIB=1 或 CMD_WINDOWS≠off 时自动关闭
+  EXTRA_REJECT        1=ASR 后叠话长句加拒并写 result.json（默认 1）
   TARGET_FRR          校准辅助目标；默认 0.02
   HOLDOUT_FRAC        >0 时仅在 calib 子集选 thr，并报 holdout contest
                       （建议 0.3；默认 0=同集扫 thr，易乐观）
@@ -83,7 +86,8 @@ Presence 门控
   CALIB_DIR           默认
     $CALIB_ROOT/reports/presence_calib_<backend>_<sep|nosep>_<ls|gthr>_<vad|novad>_<norm>
   SKIP_CALIB=1        强制跳过校准（须已有 THR）
-  FORCE_CALIB=1       强制重跑校准
+  FORCE_CALIB=1       强制重跑校准（同时关闭 LOCKED_THR）
+  LOCKED_THR=1        使用 ve/configs/locked_thr.json，跳过校准
 
 ════════════════════════════════════════════════════════════
 流程开关
@@ -97,7 +101,7 @@ Presence 门控
   $VE_OUT/manifest/samples.jsonl
   $VE_OUT/results/{pos,neg,all}_results.jsonl
   $VE_OUT/extracted/{pos,neg}/*.wav
-  $VE_OUT/reports/presence_calib/  asr_cer/  logs/
+  $VE_OUT/reports/presence_calib/  asr_cer/  lift_overlay/  submit/result.json  logs/
 
 ════════════════════════════════════════════════════════════
 USEF-TSE 与 16 kHz→8 kHz 降采样（规划，接入前必读）
@@ -200,13 +204,9 @@ if [[ "$PIPELINE" == "sep_route" ]]; then
   USE_SEP=1
 fi
 
-# VAD / 非 VAD 并存：默认 VE_OUT 与校准目录带标签，避免互相覆盖
-if [[ "$ENROLL_VAD" == "1" ]]; then VAD_TAG=vad; else VAD_TAG=novad; fi
-if [[ "$USE_SEP" == "1" ]]; then SEP_TAG=sep1; else SEP_TAG=nosep; fi
-if [[ "$LANG_SPLIT" == "1" ]]; then LS_TAG=ls; else LS_TAG=gthr; fi
-SCORE_NORM_TAG=raw
-[[ "${ASNORM:-0}" == "1" ]] && SCORE_NORM_TAG=asnorm
-[[ "${ENROLL_ZNORM:-0}" == "1" && "$SCORE_NORM_TAG" == "raw" ]] && SCORE_NORM_TAG=enroll_znorm
+# 提交默认：冻结 τ + 叠话加拒。实验臂 FORCE_CALIB / 滑窗会关掉锁定 τ。
+LOCKED_THR="${LOCKED_THR:-1}"
+EXTRA_REJECT="${EXTRA_REJECT:-1}"
 CMD_WINDOWS="${CMD_WINDOWS:-off}"
 ASR_CROP="${ASR_CROP:-1}"
 case "$(echo "$CMD_WINDOWS" | tr '[:upper:]' '[:lower:]')" in
@@ -214,6 +214,26 @@ case "$(echo "$CMD_WINDOWS" | tr '[:upper:]' '[:lower:]')" in
   energy|vad|seg) CMD_WINDOWS=energy; WIN_TAG=wenergy ;;
   *) CMD_WINDOWS=off; WIN_TAG=nowin ;;
 esac
+if [[ "${FORCE_CALIB:-0}" == "1" || "$CMD_WINDOWS" != "off" ]]; then
+  if [[ "$LOCKED_THR" == "1" ]]; then
+    echo "[INFO] FORCE_CALIB/CMD_WINDOWS → LOCKED_THR=0（实验臂，不用提交冻结 τ）"
+  fi
+  LOCKED_THR=0
+fi
+if [[ "$LOCKED_THR" == "1" ]]; then
+  if [[ "$ENROLL_VAD" == "1" ]]; then
+    echo "[INFO] LOCKED_THR=1 对应 ENROLL_VAD=0（提交配方）"
+    ENROLL_VAD=0
+  fi
+fi
+
+# VAD / 非 VAD 并存：默认 VE_OUT 与校准目录带标签，避免互相覆盖
+if [[ "$ENROLL_VAD" == "1" ]]; then VAD_TAG=vad; else VAD_TAG=novad; fi
+if [[ "$USE_SEP" == "1" ]]; then SEP_TAG=sep1; else SEP_TAG=nosep; fi
+if [[ "$LANG_SPLIT" == "1" ]]; then LS_TAG=ls; else LS_TAG=gthr; fi
+SCORE_NORM_TAG=raw
+[[ "${ASNORM:-0}" == "1" ]] && SCORE_NORM_TAG=asnorm
+[[ "${ENROLL_ZNORM:-0}" == "1" && "$SCORE_NORM_TAG" == "raw" ]] && SCORE_NORM_TAG=enroll_znorm
 VETO_CAMP="${VETO_CAMP:-0}"
 VETO_WINDOWS="${VETO_WINDOWS:-0}"
 
@@ -234,6 +254,14 @@ if [[ "$WIN_TAG" != "nowin" ]]; then
 fi
 CALIB_DIR="${CALIB_DIR:-$CALIB_ROOT/reports/${CALIB_STEM}}"
 THR_FILE="$CALIB_DIR/recommended_thr.json"
+LOCKED_THR_FILE="$ROOT/configs/locked_thr.json"
+if [[ "$LOCKED_THR" == "1" ]]; then
+  if [[ ! -f "$LOCKED_THR_FILE" ]]; then
+    echo "[ERR] LOCKED_THR=1 但缺少 $LOCKED_THR_FILE"; exit 1
+  fi
+  THR_FILE="$LOCKED_THR_FILE"
+  SKIP_CALIB=1
+fi
 
 mkdir -p "$VE_OUT"/{manifest,results,extracted,reports,logs}
 mkdir -p "$CALIB_DIR"
@@ -244,7 +272,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
-echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC"
+echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=$BEST_SEP_DIR DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
@@ -297,7 +325,7 @@ fi
 
 step() { echo; echo ">>> $* <<<"; }
 
-step "[1/6] build_manifest"
+step "[1/7] build_manifest"
 "$PYTHON_BIN" "$ROOT/scripts/build_manifest.py" \
   --data-dir "$DATA_DIR" \
   --best-sep "$BEST_SEP_DIR" \
@@ -310,8 +338,10 @@ if [[ ! -f "$CALIB_ROOT/manifest/samples.jsonl" ]]; then
 fi
 SAMPLES="${SAMPLES:-$VE_OUT/manifest/samples.jsonl}"
 
-step "[2/6] calibrate_presence (shared thr)"
-if [[ "${SKIP_CALIB:-0}" == "1" && -f "$THR_FILE" ]]; then
+step "[2/7] calibrate_presence (shared thr)"
+if [[ "$LOCKED_THR" == "1" ]]; then
+  echo "[INFO] LOCKED_THR=1 使用冻结 τ: $THR_FILE （跳过校准）"
+elif [[ "${SKIP_CALIB:-0}" == "1" && -f "$THR_FILE" ]]; then
   echo "[INFO] SKIP_CALIB=1 且已有 $THR_FILE"
 elif [[ -f "$THR_FILE" && "${FORCE_CALIB:-0}" != "1" ]]; then
   echo "[INFO] 复用已有校准: $THR_FILE （FORCE_CALIB=1 可重跑）"
@@ -354,7 +384,7 @@ mkdir -p "$VE_OUT/reports/presence_calib"
 cp -f "$THR_FILE" "$VE_OUT/reports/presence_calib/recommended_thr.json" || true
 [[ -f "$CALIB_DIR/calibration.md" ]] && cp -f "$CALIB_DIR/calibration.md" "$VE_OUT/reports/presence_calib/" || true
 
-step "[3/6] run_extract pipeline=$PIPELINE"
+step "[3/7] run_extract pipeline=$PIPELINE"
 EXT_ARGS=(
   --samples "$SAMPLES"
   --out-dir "$VE_OUT"
@@ -424,10 +454,10 @@ fi
 n_res="$("$PYTHON_BIN" -c "print(sum(1 for _ in open('$VE_OUT/results/all_results.jsonl',encoding='utf-8')))")"
 echo "[OK] extract 完成 n=$n_res → $VE_OUT/results/all_results.jsonl"
 
-step "[4/6] tse_ab placeholder report"
+step "[4/7] tse_ab placeholder report"
 "$PYTHON_BIN" "$ROOT/scripts/tse_ab.py" --ve-out "$VE_OUT" || true
 
-step "[5/6] asr_cer"
+step "[5/7] asr_cer"
 if [[ "${SKIP_ASR:-0}" == "1" ]]; then
   echo "[INFO] SKIP_ASR=1；稍后: VE_OUT=$VE_OUT ./run_asr_cer.sh"
 else
@@ -443,7 +473,25 @@ else
     || echo "[WARN] asr_cer 失败（可先 ./download_qwen3_asr.sh）；extract 结果仍保留"
 fi
 
-step "[6/6] done"
+step "[6/7] extra_reject + submit result.json"
+if [[ "$EXTRA_REJECT" != "1" ]]; then
+  echo "[INFO] EXTRA_REJECT=0，跳过叠话加拒"
+elif [[ ! -f "$VE_OUT/reports/asr_cer/asr_results.jsonl" ]]; then
+  echo "[WARN] 无 asr_cer jsonl，跳过 overlay。稍后: VE_OUT=$VE_OUT ./run_next_lift.sh submit"
+else
+  if [[ "${SKIP_NEG_ASR:-0}" != "1" ]]; then
+    echo "[arm] ASR 过门 neg（叠话加拒）"
+    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+      --ve-out "$VE_OUT" --model-dir "${ASR_MODEL_DIR:-${QWEN3_ASR_DIR:-/root/autodl-tmp/Qwen3-ASR-1.7B}}" \
+      --device "$DEVICE" --neg-fa --out-dir "$VE_OUT/reports/asr_neg_fa" \
+      || echo "[WARN] neg-fa ASR 失败；无 hyp 的 FA 不会被文本加拒"
+  fi
+  OVERLAY_ARGS=(--ve-out "$VE_OUT" --asr-pos "$VE_OUT/reports/asr_cer/asr_results.jsonl" --no-camp --write-result --tag submit)
+  [[ "$LOCKED_THR" == "1" ]] && OVERLAY_ARGS+=(--locked-thr)
+  "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" "${OVERLAY_ARGS[@]}"
+fi
+
+step "[7/7] done"
 echo "PIPELINE=$PIPELINE"
 echo "thr: $THR_FILE"
 echo "reports: $VE_OUT/reports"
