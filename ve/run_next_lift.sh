@@ -8,8 +8,10 @@
 #   ./run_next_lift.sh t1
 # T1b 热词 context（Qwen3 Vocabulary，不是指令）:
 #   ./run_next_lift.sh t1b
-# T2 滑窗（须 FORCE_CALIB，另开 VE_OUT）:
+# T2 滑窗 Presence + ASR 裁窗（须 FORCE_CALIB，另开 VE_OUT，勿覆盖 novad）:
 #   ./run_next_lift.sh t2
+# T2b 滑窗 Presence + 整段 mix ASR（优先复用 T2 决策，不重扫 τ）:
+#   ./run_next_lift.sh t2b
 # T3 时长不匹配二次解码（叠在已有 mix 提取上）:
 #   ./run_next_lift.sh t3
 # T4 离线 camp 否决（本地可跑，用 sssss 标定）:
@@ -154,12 +156,54 @@ t1b() {
 
 t2() {
   echo "=== T2 CMD windows (slide) ==="
-  echo "须重扫 τ：CMD_WINDOWS 改变分数几何"
+  echo "须重扫 τ：CMD_WINDOWS 改变分数几何；ASR 裁 argmax 窗"
+  if [[ "${VE_OUT:-}" == *ve_mix_novad* ]]; then
+    echo "[ERR] 禁止覆盖 ve_mix_novad。T2 请用 VE_OUT=/root/autodl-tmp/ve_mix_win" >&2
+    exit 2
+  fi
   ENROLL_VAD=0 PIPELINE=mix \
   PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
   CMD_WINDOWS=slide WIN_SEC="${WIN_SEC:-0.8}" HOP_SEC="${HOP_SEC:-0.4}" \
   FORCE_CALIB=1 HOLDOUT_FRAC=0.3 \
   VE_OUT="${VE_OUT:-/root/autodl-tmp/ve_mix_win}" \
+  "$ROOT/run_all.sh"
+}
+
+t2b() {
+  # 只改 ASR 输入：Presence 仍用滑窗 max；ASR 打原始 CMD 整段。
+  local src="${T2_SRC:-/root/autodl-tmp/ve_mix_win}"
+  echo "=== T2b 滑窗 Presence + 整段 mix ASR ==="
+  echo "禁止覆盖 ve_mix_novad；对照 T2 裁窗 CER，不要直接跟 novad 的 RR 比增益"
+  if mix_ok "$src"; then
+    local out="${src}/reports/asr_cer_fullmix"
+    mkdir -p "$out"
+    echo "[fast] 复用 $src 的 Presence 决策，ASR --wav-source mix → $out"
+    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+      --ve-out "$src" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE" \
+      --wav-source mix --out-dir "$out"
+    echo "对比:"
+    echo "  T2 裁窗: $src/reports/asr_cer/summary.md"
+    echo "  T2b 整段: $out/summary.md"
+    echo "  锁定 mix: /root/autodl-tmp/ve_mix_novad/reports/asr_cer/summary.md"
+    echo "主看 CER=1 桶与 contest。RR 来自 T2 窗 τ，与 novad 不可互换。"
+    return 0
+  fi
+  if [[ "${VE_OUT:-}" == *ve_mix_novad* ]]; then
+    echo "[ERR] 无 $src 且 VE_OUT 指向 novad。改成 VE_OUT=/root/autodl-tmp/ve_mix_win_fullasr" >&2
+    exit 2
+  fi
+  echo "[full] 未找到 $src，重跑 extract（ASR_CROP=0，另开目录）"
+  local calib="/root/autodl-tmp/ve_presence_best/reports/presence_calib_eres2netv2_sep1_ls_novad_raw_win/recommended_thr.json"
+  local skip_c=0
+  if [[ -f "$calib" ]]; then
+    echo "[INFO] 复用已有窗 τ: $calib"
+    skip_c=1
+  fi
+  ENROLL_VAD=0 PIPELINE=mix \
+  PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
+  CMD_WINDOWS=slide ASR_CROP=0 WIN_SEC="${WIN_SEC:-0.8}" HOP_SEC="${HOP_SEC:-0.4}" \
+  SKIP_CALIB="$skip_c" FORCE_CALIB="$([[ "$skip_c" == 1 ]] && echo 0 || echo 1)" HOLDOUT_FRAC=0.3 \
+  VE_OUT="${VE_OUT:-/root/autodl-tmp/ve_mix_win_fullasr}" \
   "$ROOT/run_all.sh"
 }
 
@@ -188,15 +232,16 @@ case "$cmd" in
   t1) t1 ;;
   t1b) t1b ;;
   t2) t2 ;;
+  t2b) t2b ;;
   t3) t3 ;;
   t4) t4 ;;
   all)
     t4
-    echo "T0 不需 GPU；T1/T1b/T2/T3 需 mix 提取 + Qwen3。"
+    echo "T0 不需 GPU；T1/T1b/T2/T2b/T3 需 mix 提取 + Qwen3。"
     ;;
   help|-h|--help|*)
-    sed -n '2,20p' "$0"
-    echo "用法: $0 t0|t1|t1b|t2|t3|t4|all"
+    sed -n '2,22p' "$0"
+    echo "用法: $0 t0|t1|t1b|t2|t2b|t3|t4|all"
     exit 0
     ;;
 esac

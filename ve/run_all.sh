@@ -61,8 +61,9 @@ Presence 门控
   TARGET_FRR          校准辅助目标；默认 0.02
   HOLDOUT_FRAC        >0 时仅在 calib 子集选 thr，并报 holdout contest
                       （建议 0.3；默认 0=同集扫 thr，易乐观）
-  CMD_WINDOWS         off|slide|energy  CMD 滑窗打分；ASR 用 argmax 窗（默认 off）
+  CMD_WINDOWS         off|slide|energy  CMD 滑窗打分（默认 off）
                       开了必须 FORCE_CALIB=1（分数几何变了）
+                      默认 ASR 裁 argmax 窗；ASR_CROP=0 则整段 mix ASR（T2b）
   VETO_CAMP=1         灰区 camp 否决（只加拒）
   VETO_WINDOWS=1      灰区次优窗否决
   ASR_LANGUAGE        强制 Qwen3 language（如 Chinese）；空=自动
@@ -207,6 +208,7 @@ SCORE_NORM_TAG=raw
 [[ "${ASNORM:-0}" == "1" ]] && SCORE_NORM_TAG=asnorm
 [[ "${ENROLL_ZNORM:-0}" == "1" && "$SCORE_NORM_TAG" == "raw" ]] && SCORE_NORM_TAG=enroll_znorm
 CMD_WINDOWS="${CMD_WINDOWS:-off}"
+ASR_CROP="${ASR_CROP:-1}"
 case "$(echo "$CMD_WINDOWS" | tr '[:upper:]' '[:lower:]')" in
   1|true|on|yes|slide) CMD_WINDOWS=slide; WIN_TAG=win ;;
   energy|vad|seg) CMD_WINDOWS=energy; WIN_TAG=wenergy ;;
@@ -219,6 +221,7 @@ if [[ -z "${VE_OUT:-}" || "${VE_OUT}" == "/root/autodl-tmp/ve" ]]; then
   VE_OUT="/root/autodl-tmp/ve_${PIPELINE}_${VAD_TAG}"
   if [[ "$WIN_TAG" != "nowin" ]]; then
     VE_OUT="${VE_OUT}_${WIN_TAG}"
+    [[ "$ASR_CROP" == "0" ]] && VE_OUT="${VE_OUT}_fullasr"
   fi
 fi
 export VE_OUT
@@ -242,7 +245,7 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
 echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC"
-echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG"
+echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=$BEST_SEP_DIR DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
 echo "PYTHON_BIN=$PYTHON_BIN"
@@ -384,6 +387,7 @@ if [[ "${ASNORM:-0}" == "1" ]]; then
 fi
 if [[ "$CMD_WINDOWS" != "off" ]]; then
   EXT_ARGS+=(--cmd-windows "$CMD_WINDOWS" --win-sec "${WIN_SEC:-0.8}" --hop-sec "${HOP_SEC:-0.4}" --win-pad-ms "${WIN_PAD_MS:-80}")
+  [[ "$ASR_CROP" == "0" ]] && EXT_ARGS+=(--no-asr-crop)
 fi
 if [[ "$VETO_CAMP" == "1" ]]; then
   EXT_ARGS+=(--veto-backend "${VETO_BACKEND:-campplus}" --veto-margin "${VETO_MARGIN:-0.12}")

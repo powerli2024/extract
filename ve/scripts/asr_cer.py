@@ -277,12 +277,24 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def resolve_wav(ve_out: Path, sample: dict[str, Any], res: dict[str, Any]) -> Optional[str]:
-    cands = []
-    w = res.get("extracted_wav")
-    if w:
-        cands.append(w)
-    cands.append(str(ve_out / "extracted" / sample["split"] / f"{sample['uid']}.wav"))
+def resolve_wav(
+    ve_out: Path,
+    sample: dict[str, Any],
+    res: dict[str, Any],
+    wav_source: str = "extracted",
+) -> Optional[str]:
+    """extracted=门控写出的 wav（T2 可能是 0.8s 窗）；mix=原始 CMD 整段。"""
+    cands: list[str] = []
+    src = (wav_source or "extracted").strip().lower()
+    if src == "mix":
+        for w in (sample.get("cmd_wav"), res.get("cmd_wav")):
+            if w:
+                cands.append(str(w))
+    else:
+        w = res.get("extracted_wav")
+        if w:
+            cands.append(str(w))
+        cands.append(str(ve_out / "extracted" / sample["split"] / f"{sample['uid']}.wav"))
     for c in cands:
         if c and Path(c).is_file():
             return str(Path(c).resolve())
@@ -374,7 +386,8 @@ def _decode_tag(args: argparse.Namespace) -> str:
     else:
         ctx = "none"
     retry = "1" if getattr(args, "retry_mismatch", False) else "0"
-    return f"vm-cer-v2|lang={lang}|ctx={ctx}|retry={retry}"
+    wav = "mix" if getattr(args, "wav_source", "extracted") == "mix" else "extracted"
+    return f"vm-cer-v2|lang={lang}|ctx={ctx}|retry={retry}|wav={wav}"
 
 
 def _asr_one(asr: Optional["Qwen3ASRBackend"], wav: str, language: Optional[str],
@@ -595,6 +608,8 @@ def parse_args() -> argparse.Namespace:
                    help="显式 ASR context 字符串；与 --domain-context / --use-wake-context 互斥优先")
     p.add_argument("--hotwords", action="store_true",
                    help="Qwen3 热词表 context（Vocabulary: …），不是指令句")
+    p.add_argument("--wav-source", choices=["extracted", "mix"], default="extracted",
+                   help="ASR 音频：extracted=门控产物（T2 窗裁剪）；mix=原始 CMD 整段")
     p.add_argument("--domain-context", action="store_true",
                    help="使用智能家居领域指令 context（T1；官方更推荐 --hotwords）")
     p.add_argument("--retry-mismatch", action="store_true",
@@ -628,7 +643,7 @@ def run_neg_fa(args: argparse.Namespace) -> int:
         r = all_res.get(s["uid"]) or {}
         if r.get("decision") != "accept":
             continue
-        wav = resolve_wav(ve_out, s, r)
+        wav = resolve_wav(ve_out, s, r, getattr(args, "wav_source", "extracted"))
         if not wav:
             cw = s.get("cmd_wav") or r.get("cmd_wav")
             if cw and Path(str(cw)).is_file():
@@ -713,8 +728,8 @@ def main() -> int:
             if cur_dec != old_dec:
                 n_stale += 1
                 continue
-            if cur_dec == "accept":
-                # 提取 wav 路径变了也重跑
+            if cur_dec == "accept" and getattr(args, "wav_source", "extracted") != "mix":
+                # 提取 wav 路径变了也重跑（mix 源不看 extracted 文件名）
                 old_wav = r.get("extracted_wav") or r.get("wav")
                 new_wav = cur.get("extracted_wav")
                 if old_wav and new_wav and Path(str(old_wav)).name != Path(str(new_wav)).name:
@@ -739,7 +754,7 @@ def main() -> int:
         if uid in done and done[uid].get("decision") == dec:
             continue
         if dec == "accept":
-            wav = resolve_wav(ve_out, s, r)
+            wav = resolve_wav(ve_out, s, r, getattr(args, "wav_source", "extracted"))
             if wav:
                 tasks.append((s, r, wav))
                 continue
@@ -810,6 +825,7 @@ def main() -> int:
         "dtype": args.dtype, "batch": args.batch, "max_new_tokens": args.max_new_tokens,
         "language": args.language, "domain_context": bool(args.domain_context),
         "hotwords": bool(getattr(args, "hotwords", False)),
+        "wav_source": getattr(args, "wav_source", "extracted"),
         "retry_mismatch": bool(args.retry_mismatch),
         "elapsed_sec": round(time.time() - t0, 2), "ve_out": str(ve_out),
         "n_written": len(ordered),

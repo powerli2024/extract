@@ -141,11 +141,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--cmd-windows",
         default="off",
-        help="off | slide | energy：CMD 滑窗/能量段打分；ASR 用 argmax 窗",
+        help="off | slide | energy：CMD 滑窗/能量段打分；默认 ASR 用 argmax 窗",
     )
     p.add_argument("--win-sec", type=float, default=0.8)
     p.add_argument("--hop-sec", type=float, default=0.4)
     p.add_argument("--win-pad-ms", type=float, default=80.0)
+    p.add_argument(
+        "--asr-crop",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="滑窗开启时是否把 mix ASR 裁到 argmax 窗（T2 默认开；T2b 用 --no-asr-crop）",
+    )
     p.add_argument(
         "--veto-backend",
         default="",
@@ -447,7 +453,7 @@ def main() -> int:
                         )
                     else:
                         out, meta = extractor.extract(cmd, enroll, sr=sr)
-                    if pr.best_window and backend == "mix":
+                    if pr.best_window and backend == "mix" and getattr(args, "asr_crop", True):
                         from window_geom import crop_with_pad
 
                         out, wmeta = crop_with_pad(
@@ -459,6 +465,14 @@ def main() -> int:
                         )
                         meta = dict(meta or {})
                         meta["asr_crop"] = wmeta
+                    elif pr.best_window and backend == "mix":
+                        meta = dict(meta or {})
+                        meta["asr_crop"] = {
+                            "skipped": True,
+                            "reason": "full_mix",
+                            "best_start": int(pr.best_window["start"]),
+                            "best_end": int(pr.best_window["end"]),
+                        }
                     out_path = extracted_dir / split / f"{uid}.wav"
                     save_audio(out_path, out, sr)
                     rec["decision"] = "accept"

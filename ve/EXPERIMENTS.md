@@ -144,15 +144,24 @@ VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1b
 
 ### T2 — CMD 滑窗时间选择
 
-Presence = max_window；ASR = argmax 窗（两侧 80ms）。须重扫 τ：
+Presence = max_window；ASR = argmax 窗（两侧 80ms）。须重扫 τ，**另开** `ve_mix_win`，禁止覆盖 `ve_mix_novad`。已跑过：裁窗 ASR contest ≈ 0.554（No-Go）。
 
 ```bash
 ./run_next_lift.sh t2
-# 等价:
-ENROLL_VAD=0 PIPELINE=mix CMD_WINDOWS=slide FORCE_CALIB=1 HOLDOUT_FRAC=0.3 ./run_all.sh
 ```
 
-与 enroll VAD、盲 TSE 不是同一实验。holdout 上看 contest。
+### T2b — 滑窗 Presence + 整段 mix ASR
+
+只改 ASR 输入：门控仍用 T2 滑窗分数，ASR 打原始 CMD 整段（不裁 0.8s）。有 `ve_mix_win` 时不重提取、不 `FORCE_CALIB`。
+
+```bash
+unset ASR_LANGUAGE ASR_DOMAIN_CONTEXT ASR_HOTWORDS
+./run_next_lift.sh t2b
+# → ve_mix_win/reports/asr_cer_fullmix/summary.md
+```
+
+无 T2 产物时才全量：`ASR_CROP=0` → `/root/autodl-tmp/ve_mix_win_fullasr`。  
+RR 来自窗 τ，不要直接跟 novad 的 RR 比；主看 CER=1 相对 T2 裁窗是否回来，contest 能否 ≥ 锁定 +0.005。
 
 ### T3 — 时长不匹配才二次解码
 
