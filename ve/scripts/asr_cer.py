@@ -601,6 +601,7 @@ def parse_args() -> argparse.Namespace:
                    help="hyp 与时长严重不匹配时二次解码（Chinese+领域），再不行回退 mix")
     p.add_argument("--neg-fa", action="store_true",
                    help="只转写 Presence 接受的 neg，写出 asr_results.jsonl（叠话加拒用）")
+    p.add_argument("--limit", type=int, default=0, help="只跑前 N 条待ASR样本（冒烟）")
     p.add_argument("--resume", action="store_true", default=True,
                    help="跳过已存在于 asr_results.jsonl 且同口径记录（默认开启）")
     p.add_argument("--no-resume", dest="resume", action="store_false")
@@ -634,7 +635,7 @@ def run_neg_fa(args: argparse.Namespace) -> int:
                 wav = str(Path(str(cw)).resolve())
         if wav:
             tasks.append((s, r, wav))
-    if args.limit and args.limit > 0:
+    if getattr(args, "limit", 0) and args.limit > 0:
         tasks = tasks[: args.limit]
     print(f"[INFO] neg FA 待 ASR={len(tasks)} → {out_path}", flush=True)
     records: dict[str, dict[str, Any]] = {}
