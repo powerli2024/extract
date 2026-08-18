@@ -1,0 +1,10 @@
+# MossFormer ONNX + onnxruntime-gpu 运行期 CUDA 动态库（AutoDL 常用）
+# 由 download_moss_onnx.sh / setup_env.sh（INSTALL_MOSS_ORT=1）安装
+onnxruntime-gpu>=1.16.0
+nvidia-cublas-cu12
+nvidia-cufft-cu12
+nvidia-cudnn-cu12
+nvidia-cuda-runtime-cu12
+nvidia-cuda-nvrtc-cu12
+nvidia-nvjitlink-cu12
+nvidia-curand-cu12

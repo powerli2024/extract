@@ -1,0 +1,4 @@
+# AutoDL / Linux: keep shell scripts LF
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf

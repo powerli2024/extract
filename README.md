@@ -1,6 +1,35 @@
+# extract — AutoDL 两个流水线
+
+仓库：https://github.com/powerli2024/extract.git  
+克隆到 `/root/extract`。数据与权重仍只放 `/root/autodl-tmp/`。
+
+```text
+/root/extract/           VM：KWS 八阶段分离（根目录命令不变）
+/root/extract/ve/        VE：Presence + mix ASR + T1–T4 下一刀
+/root/autodl-tmp/        数据、权重、跑数
+```
+
+| 做什么 | 目录 | 入口 |
+|--------|------|------|
+| KWS 分离 8 组 | `/root/extract` | `./setup_env.sh` → `./download_models.sh` → `./run_all.sh` |
+| 竞赛 Presence + mix | `/root/extract/ve` | `chmod +x *.sh` → `./run_next_lift.sh t1` |
+
+VE 下一刀（须已有 mix 提取 + Qwen3）：
+
+```bash
+cd /root/extract && git pull --ff-only
+chmod +x ve/*.sh
+cd ve
+VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t1
+```
+
+根目录也可用 `./ve.sh t1`（等价 `cd ve && ./run_next_lift.sh t1`）。
+
+---
+
 # VM — 全量分离 8 组实验（pos / neg 分树）
 
-**自包含流水线**：分离 / ASR 后端代码已整合进 `VM/scripts/`，AutoDL 上只需部署本目录 + 数据 + 权重，**不必再旁路挂载 VB / VB_onnx**。
+**自包含流水线**：分离 / ASR 后端代码已整合进 `scripts/`（本仓根），AutoDL 上只需部署本目录 + 数据 + 权重，**不必再旁路挂载 VB / VB_onnx**。
 
 代码仓库：https://github.com/powerli2024/extract.git
 

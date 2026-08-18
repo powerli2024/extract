@@ -1,0 +1,20 @@
+ve_out/
+ve_models/
+.env_ve
+.env
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ipynb_checkpoints/
+*.bak
+*.bak[0-9]
+*.log
+.DS_Store
+Thumbs.db
+# local one-shot fixers / scratch
+_fix_*.py
+*.tar.gz
+reports/
+sep_streams/

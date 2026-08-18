@@ -1,0 +1,10 @@
+numpy>=1.23
+soundfile>=0.12
+librosa>=0.10
+pyyaml>=6.0
+tqdm>=4.65
+editdistance>=0.6
+huggingface_hub>=0.20
+addict>=2.4.0
+# Presence: modelscope / wespeaker 由 setup_env.sh 另装
+# MossFormer ORT GPU 库见 requirements_moss_ort.txt（download_moss_onnx.sh / setup_env 安装）
