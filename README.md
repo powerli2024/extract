@@ -23,10 +23,8 @@ export HF_HOME=/root/autodl-tmp/cache/huggingface
 export TORCH_HOME=/root/autodl-tmp/cache/torch
 export PIP_CACHE_DIR=/root/autodl-tmp/cache/pip
 
-# 3) Python 依赖（torch CUDA wheel + requirements.txt）
-# AutoDL 先开学术加速，否则官方 cu124 wheel 很慢（阿里云 pytorch-wheels 常无索引）
-[[ -f /etc/network_turbo ]] && source /etc/network_turbo
-./setup_env.sh                 # 创建 conda env qwen3-asr
+# 3) Python 依赖（默认清华 PyPI；torch 若无 CUDA 再回退官方 cu124）
+./setup_env.sh
 source ./env.sh
 
 # 4) 分离权重（ONNX + ClearVoice .pt）；ASR 需自行放到 ASR_MODEL_DIR
@@ -149,31 +147,27 @@ export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python
 # 细分布仍用: ./run_stage.sh eval
 ```
 
-`setup_env.sh` 会安装：`torch` `torchaudio` `onnxruntime-gpu` `nvidia-*-cu12`，以及 **`requirements.txt`**（`numpy` `scipy` `soxr` `librosa` `soundfile` `editdistance` `pypinyin` `tqdm` `qwen-asr` 及其传递依赖 `transformers`/`accelerate` 等）。  
-CUDA wheel 按 `nvidia-smi` 自动选 `cu124/cu121`；可覆盖：`TORCH_CUDA=cu124 ./setup_env.sh`。  
-已完成阶段默认跳过（`VM_SKIP_DONE=1`）；不会覆盖先前产物。
+`setup_env.sh` 会安装：`torch` `torchaudio` `onnxruntime-gpu` `nvidia-*-cu12`，以及 **`requirements.txt`**。  
+**所有 pip 默认走清华源**（`pip.conf` / `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`）。  
+CUDA 标签按 `nvidia-smi` 选 `cu124/cu121`；可覆盖：`TORCH_CUDA=cu124 ./setup_env.sh`。  
+已完成阶段默认跳过（`VM_SKIP_DONE=1`）。
 
-### torch 安装说明（AutoDL）
+### pip / torch 源
 
-阿里云 `mirrors.aliyun.com/pytorch-wheels/cu124` **经常没有完整 pip 索引**，日志里会出现：
-
-```text
-ERROR: Could not find a version that satisfies the requirement torch (from versions: none)
-[WARN] 来源失败: https://mirrors.aliyun.com/pytorch-wheels/cu124
-```
-
-随后转到 `https://download.pytorch.org/whl/cu124` 并开始下 `torch-2.6.0+cu124-cp312-...whl` **才是正常路径**，不是失败。wheel 约 800MB+，请等它下完。
-
-若官方源很慢或中断：
+1. 普通包、以及 **第一次装 torch**：清华 `pypi.tuna.tsinghua.edu.cn`
+2. 仅当清华轮子 **没有 CUDA**（`torch.cuda.is_available()=False`）时，才回退 `https://download.pytorch.org/whl/cu124`
+3. 不要用阿里云 `pytorch-wheels/cu124` 当 `--index-url`（经常 `from versions: none`）
 
 ```bash
-source /etc/network_turbo          # AutoDL 学术加速
-cd /root/VM && ./setup_env.sh      # 已装好的包会跳过
-# 或指定索引:
+# 已装到一半可直接重跑（缺啥补啥）
+cd /root/VM && ./setup_env.sh
+
+# 清华源已是 CPU 版、强制官方 CUDA wheel：
+source /etc/network_turbo
 TORCH_INDEX=https://download.pytorch.org/whl/cu124 ./setup_env.sh
 ```
 
-`Running pip as the 'root' user` 在 AutoDL 上可忽略（conda env 内安装）。
+`Running pip as the 'root' user` 在 AutoDL 上可忽略。
 
 
 ## 包内已整合的代码

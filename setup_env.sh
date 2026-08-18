@@ -56,7 +56,10 @@ ENV_NAME="${VM_CONDA_ENV:-qwen3-asr}"
 PY_VER="${VM_PYTHON_VERSION:-3.12}"
 # CUDA wheel 标签：可 export TORCH_CUDA=cu124 / cu121 / cpu
 TORCH_CUDA="${TORCH_CUDA:-}"
-PIP_MIRROR=(-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn)
+TUNA_INDEX="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+TUNA_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+PIP_MIRROR=(-i "$TUNA_INDEX" --trusted-host "$TUNA_HOST")
+PIP_CONF="$ROOT/pip.conf"
 
 CONDA_BIN="${CONDA_BIN:-}"
 if [[ -z "$CONDA_BIN" ]]; then
@@ -141,12 +144,28 @@ PY
 }
 
 maybe_network_turbo() {
-  # AutoDL 学术加速：对 download.pytorch.org / HuggingFace 有效
+  # AutoDL 学术加速：仅官方 pytorch/HF 回退时需要
   if [[ -f /etc/network_turbo ]]; then
     # shellcheck disable=SC1091
     source /etc/network_turbo || true
     echo "[INFO] 已 source /etc/network_turbo"
   fi
+}
+
+apply_pip_tuna() {
+  # 全局默认清华源：环境变量 + PIP_CONFIG_FILE，避免漏掉 -i 的 pip 走到官方
+  export PIP_INDEX_URL="$TUNA_INDEX"
+  export PIP_TRUSTED_HOST="$TUNA_HOST"
+  export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
+  export PIP_DISABLE_PIP_VERSION_CHECK=1
+  if [[ -f "$PIP_CONF" ]]; then
+    export PIP_CONFIG_FILE="$PIP_CONF"
+  fi
+  echo "[INFO] pip 默认源 = 清华 $TUNA_INDEX"
+}
+
+vm_pip() {
+  "$PYTHON_BIN" -m pip install "${PIP_MIRROR[@]}" "$@"
 }
 
 torch_cuda_ok() {
@@ -162,47 +181,37 @@ PY
 
 install_torch_stack() {
   local tag="$1"
-  echo "[INFO] 安装 torch / torchaudio （tag=$tag）..."
-  maybe_network_turbo
+  echo "[INFO] 安装 torch / torchaudio （tag=$tag；优先清华 PyPI）..."
   export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
+  export _VM_WANT_GPU=1
+
+  echo "[INFO] [1/2] 清华源 pip install torch torchaudio"
+  if vm_pip torch torchaudio; then
+    if [[ "$tag" == "cpu" ]] || torch_cuda_ok; then
+      echo "[ OK ] 清华源 torch 可用"
+      return
+    fi
+    echo "[WARN] 清华源装上了 torch，但 CUDA 不可用，将卸掉后改用官方 ${tag} wheel"
+    "$PYTHON_BIN" -m pip uninstall -y torch torchaudio torchvision >/dev/null 2>&1 || true
+  else
+    echo "[WARN] 清华源安装 torch 失败，尝试官方 CUDA 索引"
+  fi
 
   if [[ "$tag" == "cpu" ]]; then
-    "$PYTHON_BIN" -m pip install torch torchaudio "${PIP_MIRROR[@]}" \
-      || "$PYTHON_BIN" -m pip install torch torchaudio
     return
   fi
 
-  # 国内 pytorch-wheels 镜像经常没有 PEP 503 完整索引 → "from versions: none"
-  # 官方 CUDA 索引必须用 --index-url（不能先走阿里云）。可用 TORCH_INDEX 覆盖。
-  local indexes=()
-  if [[ -n "${TORCH_INDEX:-}" ]]; then
-    indexes+=("$TORCH_INDEX")
-  fi
-  indexes+=(
-    "https://download.pytorch.org/whl/${tag}"
-    "https://mirror.sjtu.edu.cn/pytorch-wheels/${tag}"
-    "https://mirrors.aliyun.com/pytorch-wheels/${tag}"
-  )
-
-  local ok=0
-  local idx
-  for idx in "${indexes[@]}"; do
-    echo "[INFO] try: pip install torch torchaudio --index-url $idx"
-    if "$PYTHON_BIN" -m pip install torch torchaudio --index-url "$idx"; then
-      export _VM_WANT_GPU=1
-      if torch_cuda_ok; then
-        ok=1
-        break
-      fi
-      echo "[WARN] 该源装上了 torch，但 cuda 不可用，试下一个源"
-    else
-      echo "[WARN] 来源失败（常见于阿里云/交大 pytorch-wheels 无 cp312+${tag} 索引）: $idx"
+  # 官方 CUDA 索引会替换 PyPI；只作为清华无 GPU wheel 时的回退
+  local idx="${TORCH_INDEX:-https://download.pytorch.org/whl/${tag}}"
+  maybe_network_turbo
+  echo "[INFO] [2/2] 回退官方 CUDA 索引: --index-url $idx"
+  if "$PYTHON_BIN" -m pip install torch torchaudio --index-url "$idx"; then
+    if torch_cuda_ok; then
+      echo "[ OK ] 官方 ${tag} torch 可用"
+      return
     fi
-  done
-  if [[ "$ok" -ne 1 ]]; then
-    echo "[WARN] 专用 CUDA wheel 失败，回退清华源（可能是 CPU 版，仅应急）..."
-    "$PYTHON_BIN" -m pip install torch torchaudio "${PIP_MIRROR[@]}" || true
   fi
+  echo "[ERR] torch CUDA 安装失败。可: source /etc/network_turbo && TORCH_INDEX=$idx ./setup_env.sh"
 }
 
 PYTHON_BIN="${PYTHON_BIN:-}"
@@ -223,10 +232,9 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
 
-maybe_network_turbo
+apply_pip_tuna
 echo "[INFO] pip upgrade ..."
-export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
-"$PYTHON_BIN" -m pip install -U pip setuptools wheel "${PIP_MIRROR[@]}" >/dev/null || true
+vm_pip -U pip setuptools wheel >/dev/null || true
 
 # 1) torch / torchaudio（ASR + 通用 CUDA）
 TORCH_TAG="$(detect_torch_cuda_tag)"
@@ -245,7 +253,7 @@ fi
 # 禁止 pip -U：torch 2.6+cu124 钉死 12.4.127，-U 会升到 12.6 导致版本冲突
 if [[ "$TORCH_TAG" != "cpu" ]]; then
   echo "[INFO] 补齐 nvidia CUDA pip 库（不升级，避免盖掉 torch 钉死的 12.4.x）..."
-  "$PYTHON_BIN" -m pip install \
+  vm_pip \
     nvidia-cublas-cu12 \
     nvidia-cufft-cu12 \
     nvidia-cudnn-cu12 \
@@ -255,7 +263,7 @@ if [[ "$TORCH_TAG" != "cpu" ]]; then
     nvidia-curand-cu12 \
     nvidia-cusolver-cu12 \
     nvidia-cusparse-cu12 \
-    "${PIP_MIRROR[@]}" || echo "[WARN] nvidia-*-cu12 部分安装失败，请检查网络后重试"
+    || echo "[WARN] nvidia-*-cu12 部分安装失败，请检查网络后重试"
 fi
 
 # 2) onnxruntime-gpu（ONNX 分离）
@@ -265,10 +273,10 @@ if "$PYTHON_BIN" -c "import onnxruntime as ort; print(ort.get_available_provider
 else
   # 先卸 CPU 包避免冲突
   "$PYTHON_BIN" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
-  if ! "$PYTHON_BIN" -m pip install -U onnxruntime-gpu "${PIP_MIRROR[@]}"; then
-    echo "[WARN] onnxruntime-gpu 失败，尝试官方源..."
+  if ! vm_pip -U onnxruntime-gpu; then
+    echo "[WARN] 清华源 onnxruntime-gpu 失败，尝试官方 PyPI..."
     "$PYTHON_BIN" -m pip install -U onnxruntime-gpu || \
-      "$PYTHON_BIN" -m pip install -U onnxruntime "${PIP_MIRROR[@]}" || \
+      vm_pip -U onnxruntime || \
       echo "[ERR] onnxruntime 安装失败"
   fi
 fi
@@ -299,15 +307,14 @@ PY
 REQ_FILE="$ROOT/requirements.txt"
 echo "[INFO] pip: $REQ_FILE ..."
 if [[ -f "$REQ_FILE" ]]; then
-  "$PYTHON_BIN" -m pip install -U -r "$REQ_FILE" "${PIP_MIRROR[@]}" \
+  vm_pip -U -r "$REQ_FILE" \
     || "$PYTHON_BIN" -m pip install -U -r "$REQ_FILE"
 else
   echo "[WARN] 缺少 $REQ_FILE，回退逐包安装"
-  "$PYTHON_BIN" -m pip install -U \
+  vm_pip -U \
     numpy scipy soxr soundfile librosa audioread \
     editdistance pypinyin tqdm packaging \
-    huggingface_hub sentencepiece protobuf safetensors einops \
-    "${PIP_MIRROR[@]}"
+    huggingface_hub sentencepiece protobuf safetensors einops
 fi
 
 # 4) qwen-asr（requirements 已含；此处再确认，失败则单独重试）
@@ -315,7 +322,7 @@ echo "[INFO] 确认 qwen-asr ..."
 if "$PYTHON_BIN" -c "import qwen_asr" 2>/dev/null; then
   echo "[ OK ] qwen_asr 已可 import"
 else
-  "$PYTHON_BIN" -m pip install -U "qwen-asr" "${PIP_MIRROR[@]}" \
+  vm_pip -U "qwen-asr" \
     || "$PYTHON_BIN" -m pip install -U "qwen-asr"
 fi
 
@@ -339,6 +346,10 @@ if [[ -n "${CLEARVOICE_PYTHON:-}" && -x "${CLEARVOICE_PYTHON}" ]]; then
 fi
 cat >>"$ROOT/.runtime/env.sh" <<EOF
 export PATH="\$(dirname "$PYTHON_BIN"):\$PATH"
+export PIP_INDEX_URL="${TUNA_INDEX}"
+export PIP_TRUSTED_HOST="${TUNA_HOST}"
+export PIP_CONFIG_FILE="${PIP_CONF}"
+export PIP_ROOT_USER_ACTION="ignore"
 EOF
 cp -f "$ROOT/.runtime/env.sh" "$ROOT/env.sh"
 
