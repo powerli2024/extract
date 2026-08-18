@@ -25,7 +25,10 @@ from lift_common import (  # noqa: E402
     stratified_holdout,
     window_veto,
 )
-from refine_linguistic_patterns import classify_v2  # noqa: E402
+try:
+    from refine_linguistic_patterns import classify_v2  # noqa: E402
+except ImportError:
+    classify_v2 = None  # T1 对照不需要 xlsx；openpyxl 未装时跳过 v2 标签
 
 DEFAULT_SSSSS = Path(r"d:\media\datasetA\sssss")
 
@@ -57,7 +60,7 @@ def load_locked_rows(sssss: Path) -> list[dict[str, Any]]:
         camp_f = None if camp is None else float(camp)
         thr = float(sim.get("locked_thr") or (0.29305 if (r.get("lang") or "zh") == "zh" else 0.357868))
         hyp = r.get("asr_text") or r.get("hyp_norm") or ""
-        v2 = classify_v2(hyp)
+        v2 = classify_v2(hyp) if classify_v2 is not None else {"main": "unknown"}
         rows.append({
             **r,
             "score": eres,
