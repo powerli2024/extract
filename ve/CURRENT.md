@@ -73,12 +73,13 @@ PIPELINE=mix ./check_env.sh
 
 ## 不要进默认
 
-- 全量 `PIPELINE=ps4|wesep|sep_route`
+- 全量 `PIPELINE=ps4|wesep|sep_route|cond_tasnet`（T5 未过门前）
 - 抬高 Presence τ
 - 多编码器 OR / 灰带救援（代理 +0.012，真实 ASR 不涨）
 - 把 Presence 代理 contest（CER:=FRR）当成提交分
 - 换更大 ASR（P5 搁置）
 
-ASR 消融（T1–T4）已结：均未过锁定 +0.005。提交用 `./run_next_lift.sh submit`，不要再改上表默认。
+ASR 消融（T1–T4）已结：均未过锁定 +0.005。提交用 `./run_next_lift.sh submit`。  
+T5 Cond-TasNet 是对照臂（`./run_next_lift.sh t5`），未过 +0.005 前不改 mix 默认。
 
 换更大 ASR（P5）仍搁置。

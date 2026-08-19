@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TSE / 选路后端工厂：ps4 | wesep_bsrnn | sep_route | mix。"""
+"""TSE / 选路后端工厂：ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet。"""
 
 from __future__ import annotations
 
@@ -47,6 +47,15 @@ def create_tse(backend: str = "ps4", **kwargs: Any):
             device=kwargs.get("device", "cuda:0"),
             peak=float(kwargs.get("peak", 0.95)),
         )
+    if b in ("cond_tasnet", "condtasnet", "tasnet", "cond-tasnet"):
+        from tse_cond_tasnet import CondTasNetExtractor
+
+        return CondTasNetExtractor(
+            checkpoint=kwargs.get("cond_tasnet_ckpt") or kwargs.get("checkpoint"),
+            ecapa_dir=kwargs.get("ecapa_dir"),
+            device=kwargs.get("device", "cuda:0"),
+            chunk_sec=float(kwargs.get("chunk_sec") or kwargs.get("tasnet_chunk_sec") or 4.0),
+        )
     if b in ("mix", "passthrough", "mix_passthrough", "cmd", "none"):
         from tse_mix import MixPassthroughExtractor
 
@@ -55,5 +64,5 @@ def create_tse(backend: str = "ps4", **kwargs: Any):
             device=kwargs.get("device", "cuda:0"),
         )
     raise ValueError(
-        f"未知 tse-backend={backend!r}；可选: ps4 | wesep_bsrnn | sep_route | mix"
+        f"未知 tse-backend={backend!r}；可选: ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet"
     )

@@ -66,6 +66,10 @@ def normalize_backend(name: str) -> str:
         "mossformer": "sep_route",
         "route": "sep_route",
         "sep": "sep_route",
+        "cond_tasnet": "cond_tasnet",
+        "condtasnet": "cond_tasnet",
+        "tasnet": "cond_tasnet",
+        "cond-tasnet": "cond_tasnet",
         "mix": "mix",
         "passthrough": "mix",
         "mix_passthrough": "mix",
@@ -74,7 +78,7 @@ def normalize_backend(name: str) -> str:
     }
     if b not in aliases:
         raise SystemExit(
-            f"未知 --tse-backend={name!r}；可选: ps4 | wesep_bsrnn | sep_route | mix"
+            f"未知 --tse-backend={name!r}；可选: ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet"
         )
     return aliases[b]
 
@@ -104,8 +108,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tse-backend",
         default="ps4",
-        help="ps4 | wesep_bsrnn | sep_route | mix",
+        help="ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet",
     )
+    p.add_argument("--cond-tasnet-ckpt", type=Path, default=None)
+    p.add_argument("--ecapa-dir", type=Path, default=None)
+    p.add_argument("--tasnet-chunk-sec", type=float, default=4.0)
     p.add_argument("--ps4-weights", type=Path, default=None)
     p.add_argument("--wesep-dir", type=Path, default=None, help="兼容旧参数")
     p.add_argument("--wesep-model-dir", type=Path, default=None)
@@ -354,6 +361,9 @@ def main() -> int:
             wesep_language=args.wesep_language,
             separator=sep,
             encoder=enc,
+            cond_tasnet_ckpt=args.cond_tasnet_ckpt,
+            ecapa_dir=args.ecapa_dir,
+            tasnet_chunk_sec=float(args.tasnet_chunk_sec),
         )
 
     results_dir = ensure_dir(ve_out / "results")

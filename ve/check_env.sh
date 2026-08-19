@@ -104,6 +104,7 @@ need_wesep = pipeline in ("wesep", "wesep_bsrnn")
 need_sep = pipeline in ("sep_route", "mossformer", "route") or os.environ.get(
     "USE_SEP", "1"
 ).strip() in ("1", "true", "yes")
+need_tasnet = pipeline in ("cond_tasnet", "condtasnet", "tasnet", "cond-tasnet")
 
 check(
     f"DATA_DIR {data}",
@@ -174,6 +175,16 @@ if need_sep:
             False,
             f"{e} → 同步 VM/scripts 或 export VM_SCRIPTS=...",
         )
+
+if need_tasnet:
+    from paths import default_cond_tasnet_ckpt, default_ecapa_dir
+    ck = Path(os.environ.get("COND_TASNET_CKPT") or default_cond_tasnet_ckpt())
+    check(f"Cond-TasNet ckpt {ck}", ck.is_file(), "放到 $VE_MODEL_DIR/cond_tasnet/best.pt 或 COND_TASNET_CKPT")
+    try:
+        import speechbrain  # noqa: F401
+        check("speechbrain", True)
+    except Exception as e:
+        check("speechbrain", False, f"{e} → pip install speechbrain")
 
 # 工厂可解析
 try:

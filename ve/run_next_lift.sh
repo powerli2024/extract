@@ -16,6 +16,8 @@
 #   ./run_next_lift.sh t3
 # T4 离线 camp 否决（本地可跑，用 sssss 标定）:
 #   ./run_next_lift.sh t4
+# T5 Cond-TasNet（复用 mix 门控，另开 VE_OUT，勿覆盖 novad）:
+#   ./run_next_lift.sh t5
 # 提交：冻结 τ + 叠话加拒 → reports/submit/result.json（不重跑 Presence）:
 #   VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 # 门控: 相对锁定 +0.005 才改默认。
@@ -251,6 +253,42 @@ submit() {
   echo "对照 T0 locked_text contest 应 ≈ 0.7389"
 }
 
+t5() {
+  local src="${T5_SRC:-/root/autodl-tmp/ve_mix_novad}"
+  local ve="${VE_OUT:-/root/autodl-tmp/ve_condtasnet_novad}"
+  echo "=== T5 Cond-TasNet（复用 Presence，只换提取） ==="
+  if [[ "$ve" == *ve_mix_novad* ]]; then
+    echo "[ERR] 禁止覆盖 ve_mix_novad。T5 默认 VE_OUT=/root/autodl-tmp/ve_condtasnet_novad" >&2
+    exit 2
+  fi
+  if ! mix_ok "$src"; then
+    echo "[ERR] 需要已有 mix 门控: $src" >&2
+    exit 2
+  fi
+  echo "[arm] 复用 $src 决策 → $ve"
+  local extra=()
+  [[ -n "${COND_TASNET_CKPT:-}" ]] && extra+=(--cond-tasnet-ckpt "$COND_TASNET_CKPT")
+  [[ -n "${ECAPA_DIR:-}" ]] && extra+=(--ecapa-dir "$ECAPA_DIR")
+  "$PYTHON_BIN" "$ROOT/scripts/reextract_from_gate.py" \
+    --src-ve-out "$src" --out-dir "$ve" --tse-backend cond_tasnet \
+    --device "$DEVICE" "${extra[@]}"
+  echo "[arm] ASR"
+  "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+    --ve-out "$ve" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE"
+  echo "[arm] 冻结 τ + 叠话加拒"
+  if [[ "${SKIP_NEG_ASR:-0}" != "1" ]]; then
+    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
+      --ve-out "$ve" --model-dir "$ASR_MODEL_DIR" --device "$DEVICE" \
+      --neg-fa --out-dir "${ve}/reports/asr_neg_fa"
+  fi
+  "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" \
+    --ve-out "$ve" --asr-pos "${ve}/reports/asr_cer/asr_results.jsonl" \
+    --no-camp --locked-thr --write-result --tag submit
+  echo "对照 mix 锁定: /root/autodl-tmp/ve_mix_novad/reports/lift_overlay/locked_text.json"
+  echo "T5: $ve/reports/asr_cer/summary.md 与 $ve/reports/submit/result.json"
+  echo "Go: 真实 contest ≥ 锁定 0.739 + 0.005 才改默认"
+}
+
 case "$cmd" in
   t0) t0 ;;
   t1) t1 ;;
@@ -259,14 +297,15 @@ case "$cmd" in
   t2b) t2b ;;
   t3) t3 ;;
   t4) t4 ;;
+  t5) t5 ;;
   submit) submit ;;
   all)
     t4
-    echo "T0 不需 GPU；T1/T1b/T2/T2b/T3 需 mix 提取 + Qwen3。"
+    echo "T0 不需 GPU；T1/T1b/T2/T2b/T3/T5 需 mix 提取 + Qwen3。"
     ;;
   help|-h|--help|*)
-    sed -n '2,24p' "$0"
-    echo "用法: $0 t0|t1|t1b|t2|t2b|t3|t4|submit|all"
+    sed -n '2,26p' "$0"
+    echo "用法: $0 t0|t1|t1b|t2|t2b|t3|t4|t5|submit|all"
     exit 0
     ;;
 esac

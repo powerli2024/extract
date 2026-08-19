@@ -23,12 +23,13 @@ VE run_all.sh — Presence-gated TSE 全流程
 ════════════════════════════════════════════════════════════
 PIPELINE（提取后端）
 ════════════════════════════════════════════════════════════
-  PIPELINE=ps4|wesep|sep_route|mix     默认: ps4
+  PIPELINE=ps4|wesep|sep_route|mix|cond_tasnet     默认: ps4
 
   ps4         HF PS4 BSRNN（需 download_models.sh）
   wesep       WeSep bsrnn_ecapa（需 download_wesep.sh）
   sep_route   MossFormer 分离 + 声纹选路（需 Moss ONNX + VM/scripts）
   mix         CMD 直通 ASR（当前端到端最强基线）
+  cond_tasnet Cond-TasNet（需 COND_TASNET_CKPT + ECAPA；另开 VE_OUT）
 
   规划中（尚未接入）:
   usef        USEF-TSE（公开权重为 8 kHz；见下方「USEF 降采样」）
@@ -167,12 +168,13 @@ case "$PIPELINE_LC" in
   wesep|wesep_bsrnn|wesep_bsrnn_ecapa) PIPELINE=wesep; TSE_BACKEND=wesep_bsrnn ;;
   sep_route|mossformer|route|sep) PIPELINE=sep_route; TSE_BACKEND=sep_route ;;
   mix|passthrough|cmd|none) PIPELINE=mix; TSE_BACKEND=mix ;;
+  cond_tasnet|condtasnet|tasnet|cond-tasnet) PIPELINE=cond_tasnet; TSE_BACKEND=cond_tasnet ;;
   usef|usef_tse|usef-tse)
     echo "[ERR] PIPELINE=usef 尚未接入。请先阅读: $0 --help（USEF 降采样一节）与 NOTES_USEF_RESAMPLE.md"
     exit 1
     ;;
   *)
-    echo "[ERR] 未知 PIPELINE=${PIPELINE_RAW}；可选: ps4 | wesep | sep_route | mix"
+    echo "[ERR] 未知 PIPELINE=${PIPELINE_RAW}；可选: ps4 | wesep | sep_route | mix | cond_tasnet"
     echo "      运行 $0 --help 查看全部环境变量"
     exit 1
     ;;
@@ -322,6 +324,22 @@ if [[ "$PIPELINE" == "ps4" ]]; then
     echo "[WARN] 未找到 PS4 权重: $PS4 （extract 时可能失败）"
   fi
 fi
+if [[ "$PIPELINE" == "cond_tasnet" ]]; then
+  CK="${COND_TASNET_CKPT:-/root/autodl-tmp/ve_models/cond_tasnet/best.pt}"
+  if [[ ! -f "$CK" ]]; then
+    for alt in /root/autodl-tmp/models/cond_tasnet/best.pt \
+               /root/autodl-tmp/ve_models/cond_tasnet_v35/best.pt; do
+      [[ -f "$alt" ]] && CK="$alt" && break
+    done
+  fi
+  if [[ ! -f "$CK" ]]; then
+    echo "[ERR] 缺少 Cond-TasNet 权重。设 COND_TASNET_CKPT 或放到:"
+    echo "      /root/autodl-tmp/ve_models/cond_tasnet/best.pt"
+    exit 1
+  fi
+  export COND_TASNET_CKPT="$CK"
+  echo "[INFO] COND_TASNET_CKPT=$CK"
+fi
 
 step() { echo; echo ">>> $* <<<"; }
 
@@ -423,6 +441,8 @@ if [[ "$VETO_CAMP" == "1" ]]; then
   EXT_ARGS+=(--veto-backend "${VETO_BACKEND:-campplus}" --veto-margin "${VETO_MARGIN:-0.12}")
 fi
 [[ "$VETO_WINDOWS" == "1" ]] && EXT_ARGS+=(--veto-windows)
+[[ "$PIPELINE" == "cond_tasnet" && -n "${COND_TASNET_CKPT:-}" ]] && EXT_ARGS+=(--cond-tasnet-ckpt "$COND_TASNET_CKPT")
+[[ -n "${ECAPA_DIR:-}" ]] && EXT_ARGS+=(--ecapa-dir "$ECAPA_DIR")
 
 echo "[CMD] $PYTHON_BIN $ROOT/scripts/run_extract.py ${EXT_ARGS[*]}"
 echo "[INFO] samples=$SAMPLES thr=$THR_FILE"

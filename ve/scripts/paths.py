@@ -158,7 +158,36 @@ def default_campplus_dir() -> Path:
     return (default_model_dir() / "campplus_zh").resolve()
 
 
-def default_vblink_dir() -> Path:
+def default_cond_tasnet_ckpt() -> Path:
+    env = os.environ.get("COND_TASNET_CKPT", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    for c in (
+        default_model_dir() / "cond_tasnet" / "best.pt",
+        default_model_dir() / "cond_tasnet_v35" / "best.pt",
+        Path("/root/autodl-tmp/models/cond_tasnet/best.pt"),
+        Path("/root/autodl-tmp/ve_models/cond_tasnet/best.pt"),
+        media_root() / "models" / "cond_tasnet" / "best.pt",
+        media_root() / "V3" / "outputs" / "cond_tasnet" / "best.pt",
+    ):
+        if c.is_file():
+            return c.resolve()
+    return (default_model_dir() / "cond_tasnet" / "best.pt").resolve()
+
+
+def default_ecapa_dir() -> Path:
+    env = os.environ.get("ECAPA_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    for c in (
+        default_model_dir() / "ecapa",
+        Path("/root/autodl-tmp/models/ecapa"),
+        Path("/root/autodl-tmp/ve_models/ecapa"),
+        media_root() / "models" / "ecapa",
+    ):
+        if c.is_dir() and (c / "hyperparams.yaml").is_file():
+            return c.resolve()
+    return (default_model_dir() / "ecapa").resolve()
     env = os.environ.get("VBLINK_DIR", "").strip()
     if env:
         return Path(env).expanduser().resolve()
