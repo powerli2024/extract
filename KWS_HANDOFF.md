@@ -57,3 +57,5 @@ $VM_OUT/
 ```
 
 `kws` 的 `rebuild_best_sep.py --pos-neg $VM_OUT` 会校验该文件。`mms_fa` 为 true 则失败。
+
+`best_sep/index.jsonl` **只含 ok=true**（wav 已拷到 `best_sep/{split}/{uid}.wav`）。缺失 wav 写到 `best_sep/failed.jsonl`，不进 kws 统计。

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""阶段完成检测 / index 续跑：默认跳过已完成，支持只重跑失败。"""
+"""阶段完成检测 / index 续跑：默认跳过已完成，支持只重跑失败。
+
+完成 = 成功条数达到 catalog（不是“写了多少行”）。
+--limit 冒烟写入的 summary.partial / limit>0 一律不算完成。
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from paths import stage_dir
+from paths import THR_NAMES, stage_dir
 
 
 def _force() -> bool:
@@ -15,7 +19,6 @@ def _force() -> bool:
 
 
 def _skip_done() -> bool:
-    # 默认跳过已完成；VM_SKIP_DONE=0 关闭
     v = os.environ.get("VM_SKIP_DONE", "1").strip().lower()
     return v not in ("0", "false", "no", "off")
 
@@ -75,8 +78,7 @@ def partition_items(
 ) -> tuple[list[dict], dict[str, dict]]:
     """
     返回 (待处理 items, 已成功可保留的 uid→row)。
-    only_failed=True：只跑有 error / 缺失的；成功行保留。
-    only_failed=False 且已有部分结果：同样跳过成功行（断点续跑）。
+    失败或缺失一律进 todo（不依赖 VM_RETRY_FAILED）。
     """
     keep: dict[str, dict] = {}
     todo: list[dict] = []
@@ -86,10 +88,8 @@ def partition_items(
         if prev is not None and is_ok_row(prev):
             keep[uid] = prev
             continue
-        # 失败或缺失 → 进待办（only_failed 时成功已上面跳过）
         todo.append(it)
     if only_failed:
-        # 显式只修失败：与上面逻辑相同
         pass
     return todo, keep
 
@@ -107,6 +107,67 @@ def write_index_merged(index_path: Path, rows_by_uid: dict[str, dict], order: li
     tmp.replace(index_path)
 
 
+def _summary_is_partial(obj: dict) -> bool:
+    if obj.get("partial"):
+        return True
+    try:
+        if int(obj.get("limit") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def _gated_complete(vm_out: Path, stage: str, split: str, summary: dict) -> bool:
+    """Gated 完成：按**完整父阶段**重算子集大小，不信任 summary.n_subset（会被 --limit 污染）。"""
+    if _summary_is_partial(summary):
+        return False
+    parent = str(summary.get("parent_stage") or "").strip()
+    if not parent:
+        return False
+    parent_idx = stage_dir(vm_out, parent, split) / "index.jsonl"
+    if not parent_idx.is_file():
+        return False
+    parent_ok: list[dict] = []
+    with parent_idx.open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            if o.get("error") or o.get("oracle_cer") is None:
+                continue
+            parent_ok.append(o)
+    catalog_n = int(summary.get("catalog_n") or 0)
+    if catalog_n > 0 and len(parent_ok) < catalog_n:
+        return False
+    thr_map = summary.get("thr") or {}
+    root = stage_dir(vm_out, stage, split)
+    by = summary.get("by_thr") or {}
+    if not by:
+        return False
+    for name in THR_NAMES:
+        try:
+            thr_val = float(thr_map[name])
+        except (KeyError, TypeError, ValueError):
+            return False
+        n_exp = sum(1 for r in parent_ok if float(r["oracle_cer"]) >= thr_val)
+        info = by.get(name) or {}
+        if n_exp <= 0:
+            continue
+        ip = Path(info.get("index") or "") if info.get("index") else root / f"thr_{name}" / "index.jsonl"
+        if not ip.is_file():
+            ip = root / f"thr_{name}" / "index.jsonl"
+        if not ip.is_file():
+            return False
+        total, ok = count_index_rows(ip)
+        if ok < n_exp or total > ok:
+            return False
+    return True
+
+
 def stage_complete(
     vm_out: Path,
     stage: str,
@@ -115,44 +176,41 @@ def stage_complete(
     *,
     gated: bool = False,
 ) -> bool:
-    """判断该 split/stage 是否已完整跑完（可跳过）。有失败且开启 retry 时不算完成。"""
+    """判断该 split/stage 是否已完整跑完（可跳过）。
+
+    全量阶段：成功条数 >= n_expected 且无 error 行。
+    失败行达标不算完成（不必再设 VM_RETRY_FAILED）。
+    """
     if _force() or not _skip_done():
         return False
     root = stage_dir(vm_out, stage, split)
+    summary_path = root / "summary.json"
     if gated:
-        sp = root / "summary.json"
-        if not sp.is_file():
+        if not summary_path.is_file():
             return False
         try:
-            obj = json.loads(sp.read_text(encoding="utf-8"))
+            obj = json.loads(summary_path.read_text(encoding="utf-8"))
         except Exception:
             return False
-        by = obj.get("by_thr") or {}
-        if not by:
-            return False
-        for name, info in by.items():
-            if int(info.get("n_subset") or 0) <= 0:
-                continue
-            ip = Path(info.get("index") or "") if info.get("index") else root / f"thr_{name}" / "index.jsonl"
-            if not ip.is_file():
-                return False
-        return True
+        return _gated_complete(vm_out, stage, split, obj)
 
     index_path = root / "index.jsonl"
-    summary_path = root / "summary.json"
     if not index_path.is_file() or not summary_path.is_file():
         return False
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        summary = {}
+    if _summary_is_partial(summary):
+        return False
+    catalog = int(summary.get("catalog_n") or 0)
+    need = catalog if catalog > 0 else int(n_expected)
+    if need <= 0:
+        return False
     total, ok = count_index_rows(index_path)
-    if n_expected <= 0:
-        done = total > 0
-    else:
-        done = total >= n_expected
-    if not done:
+    if ok < need:
         return False
-    # 有失败样本时：默认仍算「阶段跑过」可 skip；若 VM_RETRY_FAILED=1 则不算完成
-    if retry_failed() and ok < total:
-        return False
-    if retry_failed() and n_expected > 0 and ok < n_expected:
+    if total > ok:
         return False
     return True
 
@@ -160,7 +218,7 @@ def stage_complete(
 def skip_message(stage: str, split: str, detail: str = "") -> None:
     print(
         f"[SKIP] {split}/{stage} 已完成，跳过（不覆盖）。"
-        f"强制重跑: --force；只补失败: --retry-failed 或 VM_RETRY_FAILED=1。"
+        f"强制重跑: --force；失败样本会在未完成时自动补跑。"
         f"{detail}",
         flush=True,
     )

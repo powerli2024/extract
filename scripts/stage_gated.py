@@ -26,6 +26,7 @@ from paths import (
 )
 from progress_log import StageProgress
 from report_cer_dist import compute_dist, report_from_index
+from sep_common import close_sep, separate_batch_resilient, separate_one_with_oom_retry
 from stage_resume import (
     count_index_rows,
     load_index_by_uid,
@@ -37,53 +38,11 @@ from stage_resume import (
 )
 
 setup_sys_path()
-from utils_audio import load_audio, peak_normalize, save_audio, truncate_wav  # noqa: E402
+from utils_audio import load_audio, save_audio  # noqa: E402
 
 
-def _is_oom(err: BaseException | str) -> bool:
-    s = str(err).lower()
-    return "out of memory" in s or "oom" in s or "cudaerrormemoryallocation" in s
-
-
-def _close_sep(sep) -> None:
-    for name in ("close", "release_gpu"):
-        fn = getattr(sep, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception as e:
-                print(f"[WARN] sep.{name}: {e}", flush=True)
-    try:
-        import gc
-
-        import torch
-
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-
-
-def _separate_one(sep, wav, sr: int, max_sep_sec: float):
-    try:
-        return sep.separate(wav, sr=sr, max_sec=max_sep_sec)
-    except Exception as e:
-        if not _is_oom(e):
-            raise
-        if hasattr(sep, "empty_cache"):
-            try:
-                sep.empty_cache()
-            except Exception:
-                pass
-        shorter = 3.0 if max_sep_sec <= 0 else min(float(max_sep_sec), 3.0)
-        if max_sep_sec > 0 and shorter >= float(max_sep_sec) - 1e-6:
-            shorter = min(shorter, 2.0)
-        print(f"[WARN] sep OOM → retry max_sep_sec={shorter}", flush=True)
-        w = wav
-        if shorter > 0:
-            w = truncate_wav(wav, sr=sr, max_sec=shorter, mode="energy")
-        return sep.separate(w, sr=sr, max_sec=shorter)
+class MissingParentWavError(FileNotFoundError):
+    pass
 
 
 def _load_parent_index(vm_out: Path, parent_stage: str, split: str) -> list[dict]:
@@ -193,16 +152,12 @@ def _run_thr_subset(
         try:
             if mode == "cv_peak":
                 pp = wav_path(parent_root, uid, "peak")
-                if pp.is_file():
-                    peak_wav, sr = load_audio(pp, 16000)
-                else:
-                    raw, sr = load_audio(it["kws_path"], 16000)
-                    peak_wav = peak_normalize(raw, peak=peak)
-                    if max_sep_sec > 0:
-                        peak_wav = truncate_wav(
-                            peak_wav, sr=sr, max_sec=max_sep_sec, mode="energy"
-                        )
-                s1, s2 = _separate_one(sep, peak_wav, sr, max_sep_sec)
+                if not pp.is_file():
+                    raise MissingParentWavError(
+                        f"缺少父阶段 peak wav: {pp}（gated 禁止回退 kws 一阶）"
+                    )
+                peak_wav, sr = load_audio(pp, 16000)
+                s1, s2 = separate_one_with_oom_retry(sep, peak_wav, sr, max_sep_sec)
                 for t, w in (("peak", peak_wav), ("spk1", s1), ("spk2", s2)):
                     save_audio(wav_path(out_root, uid, t), w, sr)
                 cands = {"original": peak_wav, "spk1": s1, "spk2": s2}
@@ -211,26 +166,21 @@ def _run_thr_subset(
                 p1 = wav_path(parent_root, uid, "spk1")
                 p2 = wav_path(parent_root, uid, "spk2")
                 if not (p_peak.is_file() and p1.is_file() and p2.is_file()):
-                    raise FileNotFoundError(f"缺少父阶段 wav: {uid}")
+                    raise MissingParentWavError(f"缺少父阶段 wav: {uid}")
                 peak_wav, sr = load_audio(p_peak, 16000)
                 s1, _ = load_audio(p1, 16000)
                 s2, _ = load_audio(p2, 16000)
                 save_audio(wav_path(out_root, uid, "peak"), peak_wav, sr)
                 save_audio(wav_path(out_root, uid, "spk1"), s1, sr)
                 save_audio(wav_path(out_root, uid, "spk2"), s2, sr)
-                try:
-                    if hasattr(sep, "separate_many"):
-                        outs = sep.separate_many([s1, s2], sr=sr, max_sec=max_sep_sec)
-                        if isinstance(outs[0], Exception):
-                            raise outs[0]
-                        if isinstance(outs[1], Exception):
-                            raise outs[1]
-                        (a1, a2), (b1, b2) = outs[0], outs[1]
-                    else:
-                        raise RuntimeError("no separate_many")
-                except Exception:
-                    a1, a2 = _separate_one(sep, s1, sr, max_sep_sec)
-                    b1, b2 = _separate_one(sep, s2, sr, max_sep_sec)
+                outs = separate_batch_resilient(
+                    sep, [s1, s2], sr=sr, max_sep_sec=max_sep_sec
+                )
+                if isinstance(outs[0], Exception):
+                    raise outs[0]
+                if isinstance(outs[1], Exception):
+                    raise outs[1]
+                (a1, a2), (b1, b2) = outs[0], outs[1]
                 for t, w in (
                     ("spk1_r1", a1),
                     ("spk1_r2", a2),
@@ -262,9 +212,29 @@ def _run_thr_subset(
 
     prog.close()
 
-    if use_cv:
-        print(f"[INFO] thr_{thr_name} release sep → ASR (n={len(pending)})", flush=True)
-        _close_sep(sep)
+    if not pending:
+        write_index_merged(index_path, rows_by_uid, order)
+        ok_rows = [
+            rows_by_uid[u] for u in order if u in rows_by_uid and not rows_by_uid[u].get("error")
+        ]
+        fail_n = sum(1 for u in order if u in rows_by_uid and rows_by_uid[u].get("error"))
+        return {
+            "thr_name": thr_name,
+            "thr": thr_val,
+            "n_subset": len(rows),
+            "n_ok": len(ok_rows),
+            "n_fail": fail_n,
+            "mean_parent_cer": round(
+                sum(float(r["oracle_cer"]) for r in rows) / len(rows), 4
+            )
+            if rows
+            else None,
+            "mean_oracle_cer": None,
+            "index": str(index_path.resolve()),
+        }
+
+    print(f"[INFO] thr_{thr_name} release sep → ASR (n={len(pending)})", flush=True)
+    close_sep(sep)
 
     asr = create_asr(device=device, model_dir=asr_model_dir.strip() or None)
     prog2 = StageProgress(len(pending), f"{split}/{thr_name}-asr")
@@ -348,10 +318,10 @@ def run_gated(stage: str, vm_out: Path, split: str, args: argparse.Namespace) ->
             skip_message(stage, split)
             return
 
-    rows = _load_parent_index(vm_out, parent, split)
-    if args.limit > 0:
-        rows = rows[: args.limit]
-    thr_map = _resolve_thr(rows, args.thr)
+    rows_all = _load_parent_index(vm_out, parent, split)
+    catalog_n = len(rows_all)
+    thr_map = _resolve_thr(rows_all, args.thr)
+    rows = rows_all[: args.limit] if args.limit > 0 else rows_all
     print(f"[INFO] {split}/{stage} parent={parent} thr={thr_map}")
 
     reports = ensure_reports(vm_out, split)
@@ -377,35 +347,36 @@ def run_gated(stage: str, vm_out: Path, split: str, args: argparse.Namespace) ->
             by_thr[name] = {"thr": thr_val, "n_subset": 0, "n_ok": 0, "n_fail": 0}
             continue
 
-        # 每个 thr 独立建 sep（CV 会在 thr 内关闭再上 ASR）
-        if cfg["sep"] == "onnx":
-            from sep_onnx import create_onnx_separator
+        sep = None
+        try:
+            if cfg["sep"] == "onnx":
+                from sep_onnx import create_onnx_separator
 
-            sep = create_onnx_separator(peak=args.peak, device=args.device)
-        else:
-            from sep_cv import create_cv_separator
+                sep = create_onnx_separator(peak=args.peak, device=args.device)
+            else:
+                from sep_cv import create_cv_separator
 
-            os.environ.setdefault("MOSS_GPU_FRAC", "0.92")
-            sep = create_cv_separator(peak=args.peak, device=args.device)
+                os.environ.setdefault("MOSS_GPU_FRAC", "0.92")
+                sep = create_cv_separator(peak=args.peak, device=args.device)
 
-        summary = _run_thr_subset(
-            mode=cfg["mode"],
-            sep=sep,
-            rows=sub,
-            parent_root=parent_root,
-            out_root=sub_dir,
-            peak=args.peak,
-            max_sep_sec=args.max_sep_sec,
-            parent_stage=parent,
-            thr_name=name,
-            thr_val=thr_val,
-            split=split,
-            asr_model_dir=args.asr_model_dir,
-            device=args.device,
-            use_cv=use_cv,
-        )
-        if not use_cv:
-            _close_sep(sep)
+            summary = _run_thr_subset(
+                mode=cfg["mode"],
+                sep=sep,
+                rows=sub,
+                parent_root=parent_root,
+                out_root=sub_dir,
+                peak=args.peak,
+                max_sep_sec=args.max_sep_sec,
+                parent_stage=parent,
+                thr_name=name,
+                thr_val=thr_val,
+                split=split,
+                asr_model_dir=args.asr_model_dir,
+                device=args.device,
+                use_cv=use_cv,
+            )
+        finally:
+            close_sep(sep)
         by_thr[name] = summary
         (sub_dir / "summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -419,6 +390,9 @@ def run_gated(stage: str, vm_out: Path, split: str, args: argparse.Namespace) ->
         "sep_backend": cfg["sep"],
         "thr": thr_map,
         "by_thr": by_thr,
+        "catalog_n": int(catalog_n),
+        "limit": int(args.limit or 0),
+        "partial": bool(args.limit and int(args.limit) > 0),
         "stage_root": str(stage_root.resolve()),
     }
     (stage_root / "summary.json").write_text(

@@ -23,6 +23,7 @@ from paths import (
     wav_path,
 )
 from progress_log import StageProgress
+from sep_common import close_sep, separate_batch_resilient, separate_one_with_oom_retry
 from stage_resume import (
     load_index_by_uid,
     partition_items,
@@ -33,82 +34,30 @@ from stage_resume import (
 )
 
 setup_sys_path()
-from utils_audio import load_audio, peak_normalize, save_audio, truncate_wav  # noqa: E402
+from utils_audio import load_audio, save_audio  # noqa: E402
 
 
-def _is_oom(err: BaseException | str) -> bool:
-    s = str(err).lower()
-    return "out of memory" in s or "oom" in s or "cudaerrormemoryallocation" in s
+class MissingParentWavError(FileNotFoundError):
+    """Cascade 必须吃父阶段 wav；禁止回退成一阶分离。"""
 
 
-def _close_sep(sep) -> None:
-    for name in ("close", "release_gpu"):
-        fn = getattr(sep, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception as e:
-                print(f"[WARN] sep.{name}: {e}", flush=True)
-    try:
-        import gc
-
-        import torch
-
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-
-
-def _separate_one(sep, wav, sr: int, max_sep_sec: float):
-    try:
-        return sep.separate(wav, sr=sr, max_sec=max_sep_sec)
-    except Exception as e:
-        if not _is_oom(e):
-            raise
-        if hasattr(sep, "empty_cache"):
-            try:
-                sep.empty_cache()
-            except Exception:
-                pass
-        shorter = 3.0 if max_sep_sec <= 0 else min(float(max_sep_sec), 3.0)
-        if max_sep_sec > 0 and shorter >= float(max_sep_sec) - 1e-6:
-            shorter = min(shorter, 2.0)
-        print(f"[WARN] sep OOM → retry max_sep_sec={shorter}", flush=True)
-        w = wav
-        if shorter > 0:
-            w = truncate_wav(wav, sr=sr, max_sec=shorter, mode="energy")
-        return sep.separate(w, sr=sr, max_sec=shorter)
-
-
-def _load_or_sep_first(
+def _load_parent_streams(
     *,
     parent: Path,
     uid: str,
-    kws_path: str,
-    sep,
-    peak: float,
-    max_sep_sec: float,
     stage_root: Path,
 ):
     p_peak = wav_path(parent, uid, "peak")
     p1 = wav_path(parent, uid, "spk1")
     p2 = wav_path(parent, uid, "spk2")
-    if p_peak.is_file() and p1.is_file() and p2.is_file():
-        peak_wav, sr = load_audio(p_peak, 16000)
-        s1, _ = load_audio(p1, 16000)
-        s2, _ = load_audio(p2, 16000)
-    else:
-        print(
-            f"[WARN] {uid}: 父阶段 wav 缺失 ({parent.name})，回退从 kws 一阶分离",
-            flush=True,
+    missing = [str(p) for p in (p_peak, p1, p2) if not p.is_file()]
+    if missing:
+        raise MissingParentWavError(
+            f"cascade 父阶段 wav 缺失 uid={uid} parent={parent.name}: {missing}"
         )
-        raw, sr = load_audio(kws_path, 16000)
-        peak_wav = peak_normalize(raw, peak=peak)
-        if max_sep_sec > 0:
-            peak_wav = truncate_wav(peak_wav, sr=sr, max_sec=max_sep_sec, mode="energy")
-        s1, s2 = _separate_one(sep, peak_wav, sr, max_sep_sec)
+    peak_wav, sr = load_audio(p_peak, 16000)
+    s1, _ = load_audio(p1, 16000)
+    s2, _ = load_audio(p2, 16000)
     save_audio(wav_path(stage_root, uid, "peak"), peak_wav, sr)
     save_audio(wav_path(stage_root, uid, "spk1"), s1, sr)
     save_audio(wav_path(stage_root, uid, "spk2"), s2, sr)
@@ -116,28 +65,13 @@ def _load_or_sep_first(
 
 
 def _cascade_second(sep, s1, s2, sr: int, max_sep_sec: float):
-    """二阶：对 s1/s2 再分离。"""
-    try:
-        if hasattr(sep, "separate_many"):
-            outs = sep.separate_many([s1, s2], sr=sr, max_sec=max_sep_sec)
-            if isinstance(outs[0], Exception):
-                raise outs[0]
-            if isinstance(outs[1], Exception):
-                raise outs[1]
-            return outs[0], outs[1]
-    except Exception as e:
-        if not _is_oom(e):
-            # separate_many 失败则改逐条
-            pass
-        else:
-            if hasattr(sep, "empty_cache"):
-                try:
-                    sep.empty_cache()
-                except Exception:
-                    pass
-    a1, a2 = _separate_one(sep, s1, sr, max_sep_sec)
-    b1, b2 = _separate_one(sep, s2, sr, max_sep_sec)
-    return (a1, a2), (b1, b2)
+    """二阶：对 s1/s2 再分离。单条失败不拖垮另一条。"""
+    outs = separate_batch_resilient(sep, [s1, s2], sr=sr, max_sep_sec=max_sep_sec)
+    if isinstance(outs[0], Exception):
+        raise outs[0]
+    if isinstance(outs[1], Exception):
+        raise outs[1]
+    return outs[0], outs[1]
 
 
 def run_cascade(
@@ -152,6 +86,8 @@ def run_cascade(
     max_sep_sec: float,
     device: str,
     asr_model_dir: str,
+    catalog_n: int,
+    limit: int,
 ) -> Path:
     split = assert_split(split)
     stage_root = ensure_stage(vm_out, stage, split)
@@ -159,7 +95,7 @@ def run_cascade(
     index_path = stage_root / "index.jsonl"
     order = [str(it["uid"]) for it in items]
 
-    if stage_complete(vm_out, stage, split, len(items)):
+    if stage_complete(vm_out, stage, split, catalog_n):
         skip_message(stage, split, f" index={index_path}")
         return index_path
 
@@ -206,13 +142,9 @@ def run_cascade(
             raise SystemExit(f"[ERR] item split 混入: {it}")
         uid = it["uid"]
         try:
-            peak_wav, s1, s2, sr = _load_or_sep_first(
+            peak_wav, s1, s2, sr = _load_parent_streams(
                 parent=parent,
                 uid=uid,
-                kws_path=it["kws_path"],
-                sep=sep,
-                peak=peak,
-                max_sep_sec=max_sep_sec,
                 stage_root=stage_root,
             )
             (a1, a2), (b1, b2) = _cascade_second(sep, s1, s2, sr, max_sep_sec)
@@ -249,7 +181,7 @@ def run_cascade(
         f"[INFO] {split}/{stage} phase1 done sep_ok={len(pending_score)}; release sep → ASR",
         flush=True,
     )
-    _close_sep(sep)
+    close_sep(sep)
     sep = None
 
     asr = create_asr(device=device, model_dir=asr_model_dir.strip() or None)
@@ -300,6 +232,9 @@ def run_cascade(
         "backend": backend,
         "parent_stage": parent_stage,
         "n_items": len(items),
+        "catalog_n": int(catalog_n),
+        "limit": int(limit or 0),
+        "partial": bool(limit and int(limit) > 0),
         "n_ok": len(ok_rows),
         "n_fail": fail_n,
         "mean_oracle_cer": round(sum(ok_cers) / len(ok_cers), 4) if ok_cers else None,
@@ -335,36 +270,25 @@ def main() -> None:
         os.environ["VM_RETRY_FAILED"] = "1"
 
     vm_out = Path(args.vm_out) if args.vm_out else default_vm_out()
-    items = load_items(vm_out, args.split)
-    if args.limit > 0:
-        items = items[: args.limit]
+    items_all = load_items(vm_out, args.split)
+    catalog_n = len(items_all)
+    items = items_all[: args.limit] if args.limit > 0 else items_all
+    common = dict(
+        vm_out=vm_out,
+        split=args.split,
+        items=items,
+        peak=args.peak,
+        max_sep_sec=args.max_sep_sec,
+        device=args.device,
+        asr_model_dir=args.asr_model_dir,
+        catalog_n=catalog_n,
+        limit=int(args.limit or 0),
+    )
 
     if args.stage == "s3":
-        run_cascade(
-            stage="s3",
-            parent_stage="s1",
-            backend="onnx",
-            vm_out=vm_out,
-            split=args.split,
-            items=items,
-            peak=args.peak,
-            max_sep_sec=args.max_sep_sec,
-            device=args.device,
-            asr_model_dir=args.asr_model_dir,
-        )
+        run_cascade(stage="s3", parent_stage="s1", backend="onnx", **common)
     else:
-        run_cascade(
-            stage="s4",
-            parent_stage="s2",
-            backend="cv",
-            vm_out=vm_out,
-            split=args.split,
-            items=items,
-            peak=args.peak,
-            max_sep_sec=args.max_sep_sec,
-            device=args.device,
-            asr_model_dir=args.asr_model_dir,
-        )
+        run_cascade(stage="s4", parent_stage="s2", backend="cv", **common)
 
 
 if __name__ == "__main__":

@@ -167,7 +167,7 @@ def write_handoff(vm_out: Path, records: list[dict[str, Any]], splits: list[str]
         "stage_dirs": STAGE_DIRS,
         "splits": splits,
         "vm_out": str(vm_out),
-        "n_records": len(records),
+        "n_records": sum(1 for r in records if r.get("ok")),
         "n_ok": sum(1 for r in records if r.get("ok")),
         "n_fail": sum(1 for r in records if not r.get("ok")),
         "kws_repo": "https://github.com/powerli2024/kws",
@@ -240,15 +240,19 @@ def main() -> int:
     if args.compare_existing:
         return compare_existing(vm_out, all_rec)
     collect = vm_out / "best_sep"
-    write_jsonl(collect / "index.jsonl", all_rec)
+    ok_rec = [r for r in all_rec if r.get("ok")]
+    fail_rec = [r for r in all_rec if not r.get("ok")]
+    write_jsonl(collect / "index.jsonl", ok_rec)
+    write_jsonl(collect / "failed.jsonl", fail_rec)
     (collect / "summary.json").write_text(
         json.dumps(
             {
-                "n_records": len(all_rec),
-                "n_ok": sum(1 for r in all_rec if r.get("ok")),
-                "n_fail": sum(1 for r in all_rec if not r.get("ok")),
+                "n_records": len(ok_rec),
+                "n_ok": len(ok_rec),
+                "n_fail": len(fail_rec),
                 "splits": splits,
                 "dest_dir": str(collect),
+                "index_excludes_failed": True,
             },
             ensure_ascii=False,
             indent=2,
@@ -257,8 +261,12 @@ def main() -> int:
         encoding="utf-8",
     )
     handoff = write_handoff(vm_out, all_rec, splits)
-    n_fail = sum(1 for r in all_rec if not r.get("ok"))
-    print(f"[OK] {collect / 'index.jsonl'}  handoff={handoff}  fail={n_fail}", flush=True)
+    n_fail = len(fail_rec)
+    print(
+        f"[OK] {collect / 'index.jsonl'} n_ok={len(ok_rec)}  "
+        f"failed={collect / 'failed.jsonl'} n_fail={n_fail}  handoff={handoff}",
+        flush=True,
+    )
     return 1 if n_fail else 0
 
 

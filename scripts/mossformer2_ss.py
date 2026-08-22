@@ -54,6 +54,46 @@ def emit(obj):
     _PROTO_OUT.write(json.dumps(obj) + "\n")
     _PROTO_OUT.flush()
 
+def truncate_energy(audio, sr, max_sec):
+    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+    max_n = int(max(0.5, float(max_sec)) * int(sr))
+    if len(audio) <= max_n:
+        return audio
+    hop = max(1, max_n // 4)
+    best_i, best_e = 0, -1.0
+    for i in range(0, len(audio) - max_n + 1, hop):
+        seg = audio[i:i + max_n]
+        e = float(np.dot(seg, seg))
+        if e > best_e:
+            best_e, best_i = e, i
+    tail = len(audio) - max_n
+    if tail > 0:
+        seg = audio[tail:]
+        e = float(np.dot(seg, seg))
+        if e > best_e:
+            best_i = tail
+    return audio[best_i:best_i + max_n].copy()
+
+def split_two_speaker(arr):
+    raw = tuple(np.asarray(arr).shape)
+    a = np.asarray(arr)
+    if a.ndim == 3:
+        a = np.squeeze(a)
+    if a.ndim == 1:
+        raise RuntimeError("sep output collapsed to 1-D from %s" % (raw,))
+    if a.ndim != 2:
+        raise RuntimeError("unexpected sep output shape %s -> %s" % (raw, a.shape))
+    n0, n1 = int(a.shape[0]), int(a.shape[1])
+    if n0 == 2 and n1 != 2:
+        s1, s2 = a[0], a[1]
+    elif n1 == 2 and n0 != 2:
+        s1, s2 = a[:, 0], a[:, 1]
+    elif n0 == 2 and n1 == 2:
+        s1, s2 = a[0], a[1]
+    else:
+        raise RuntimeError("cannot find 2-speaker axis in %s" % (raw,))
+    return np.asarray(s1, dtype=np.float32).reshape(-1), np.asarray(s2, dtype=np.float32).reshape(-1)
+
 def _iter_torch_modules(cv):
     import torch
     models = []
@@ -144,23 +184,14 @@ def separate_one(cv, wav_path, out1, out2, sr, max_sec=0):
         audio = librosa.resample(audio.astype(np.float32), orig_sr=file_sr, target_sr=sr)
     audio = np.asarray(audio, dtype=np.float32)
     if max_sec and max_sec > 0:
-        max_n = int(float(max_sec) * int(sr))
-        if len(audio) > max_n:
-            audio = audio[:max_n]
+        audio = truncate_energy(audio, sr, max_sec)
     if audio.ndim == 1:
         audio = audio.reshape(1, -1)
 
     def _run():
         output_wav = cv(audio, False)
         arr = np.asarray(output_wav)
-        if arr.ndim == 3:
-            s1 = arr[0, 0, :]
-            s2 = arr[1, 0, :] if arr.shape[0] > 1 else arr[0, 0, :]
-        elif arr.ndim == 2:
-            s1 = arr[0]
-            s2 = arr[1] if arr.shape[0] > 1 else arr[0]
-        else:
-            raise RuntimeError("unexpected shape %s" % (arr.shape,))
+        s1, s2 = split_two_speaker(arr)
         sf.write(out1, s1.astype(np.float32), sr)
         sf.write(out2, s2.astype(np.float32), sr)
 
@@ -642,14 +673,9 @@ class MossFormer2Separator:
         audio = wav.reshape(1, -1).astype(np.float32)
         output_wav = self._cv(audio, False)
         arr = np.asarray(output_wav)
-        if arr.ndim == 3:
-            s1 = arr[0, 0, :].astype(np.float32)
-            s2 = (arr[1, 0, :] if arr.shape[0] > 1 else arr[0, 0, :]).astype(np.float32)
-        elif arr.ndim == 2:
-            s1 = arr[0].astype(np.float32)
-            s2 = (arr[1] if arr.shape[0] > 1 else arr[0]).astype(np.float32)
-        else:
-            raise RuntimeError(f"unexpected clearvoice output shape: {arr.shape}")
+        from sep_common import split_two_speaker_wav
+
+        s1, s2 = split_two_speaker_wav(arr)
         return peak_normalize(s1, self.peak), peak_normalize(s2, self.peak)
 
     def _tmp_dir(self):
@@ -862,8 +888,13 @@ class MossFormer2Separator:
                 print(f"[moss] inprocess acquire_gpu 失败: {e}", flush=True)
 
     def close(self) -> None:
+        try:
+            self.release_gpu()
+        except Exception:
+            pass
         proc = self._proc
         self._proc = None
+        self._cv = None
         if proc is None:
             return
         try:

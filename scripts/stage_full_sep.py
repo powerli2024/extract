@@ -27,6 +27,7 @@ from paths import (
 )
 from progress_log import StageProgress
 from report_cer_dist import report_from_index
+from sep_common import close_sep, separate_batch_resilient, separate_one_with_oom_retry
 from stage_resume import (
     load_index_by_uid,
     partition_items,
@@ -47,57 +48,6 @@ def _sep_batch_size(backend: str) -> int:
     return 8 if backend == "onnx" else 1
 
 
-def _is_oom(err: BaseException | str) -> bool:
-    s = str(err).lower()
-    return "out of memory" in s or "oom" in s or "cudaerrormemoryallocation" in s
-
-
-def _separate_one(sep, peak_wav, sr: int, max_sep_sec: float):
-    """分离；OOM 时 empty_cache + 缩短时长再试。"""
-    try:
-        return sep.separate(peak_wav, sr=sr, max_sec=max_sep_sec)
-    except Exception as e:
-        if not _is_oom(e):
-            raise
-        if hasattr(sep, "empty_cache"):
-            try:
-                sep.empty_cache()
-            except Exception:
-                pass
-        # 难样本：再压到 ≤3s
-        shorter = 3.0
-        if max_sep_sec > 0:
-            shorter = min(float(max_sep_sec), 3.0)
-        if max_sep_sec > 0 and shorter >= float(max_sep_sec) - 1e-6:
-            # 已经很短仍 OOM：再砍到 2s
-            shorter = min(shorter, 2.0)
-        print(f"[WARN] sep OOM → retry max_sep_sec={shorter}", flush=True)
-        wav = peak_wav
-        if shorter > 0:
-            wav = truncate_wav(peak_wav, sr=sr, max_sec=shorter, mode="energy")
-        return sep.separate(wav, sr=sr, max_sec=shorter)
-
-
-def _close_sep(sep) -> None:
-    for name in ("close", "release_gpu"):
-        fn = getattr(sep, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception as e:
-                print(f"[WARN] sep.{name}: {e}", flush=True)
-    try:
-        import gc
-
-        import torch
-
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-
-
 def run_full_sep(
     *,
     stage: str,
@@ -109,13 +59,15 @@ def run_full_sep(
     max_sep_sec: float,
     device: str,
     asr_model_dir: str,
+    catalog_n: int,
+    limit: int,
 ) -> Path:
     split = assert_split(split)
     stage_root = ensure_stage(vm_out, stage, split)
     index_path = stage_root / "index.jsonl"
     order = [str(it["uid"]) for it in items]
 
-    if stage_complete(vm_out, stage, split, len(items)):
+    if stage_complete(vm_out, stage, split, catalog_n):
         skip_message(stage, split, f" index={index_path}")
         return index_path
 
@@ -183,24 +135,13 @@ def run_full_sep(
         to_sep_idx = [i for i, (_, w, _) in enumerate(prepared) if not isinstance(w, Exception)]
         sep_outs: dict[int, object] = {}
         if to_sep_idx:
-            # ClearVoice 逐条（含 OOM 降级）；ONNX 可 batch
-            if backend == "onnx" and hasattr(sep, "separate_many") and len(to_sep_idx) > 1:
-                wavs = [prepared[i][1] for i in to_sep_idx]
-                sr0 = prepared[to_sep_idx[0]][2]
-                try:
-                    outs = sep.separate_many(wavs, sr=sr0, max_sec=max_sep_sec)
-                    for j, oi in enumerate(to_sep_idx):
-                        sep_outs[oi] = outs[j]
-                except Exception as e:
-                    for oi in to_sep_idx:
-                        sep_outs[oi] = e
-            else:
-                for oi in to_sep_idx:
-                    it_i, wav_i, sr_i = prepared[oi]
-                    try:
-                        sep_outs[oi] = _separate_one(sep, wav_i, sr_i, max_sep_sec)
-                    except Exception as e:
-                        sep_outs[oi] = e
+            wavs = [prepared[i][1] for i in to_sep_idx]
+            sr0 = prepared[to_sep_idx[0]][2]
+            batch_outs = separate_batch_resilient(
+                sep, wavs, sr=sr0, max_sep_sec=max_sep_sec
+            )
+            for j, oi in enumerate(to_sep_idx):
+                sep_outs[oi] = batch_outs[j]
 
         for i, (it, peak_or_err, sr) in enumerate(prepared):
             uid = it["uid"]
@@ -212,7 +153,7 @@ def run_full_sep(
                 if isinstance(out, Exception):
                     raise out
                 if out is None:
-                    s1, s2 = _separate_one(sep, peak_wav, sr, max_sep_sec)
+                    s1, s2 = separate_one_with_oom_retry(sep, peak_wav, sr, max_sep_sec)
                 else:
                     s1, s2 = out
                 save_audio(wav_path(stage_root, uid, "peak"), peak_wav, sr)
@@ -244,7 +185,7 @@ def run_full_sep(
 
     # 释放分离模型显存，再上 ASR（解决 CV+ASR 同卡 OOM）
     print(f"[INFO] {split}/{stage} phase1 done sep_ok={len(pending_score)}; release sep → load ASR", flush=True)
-    _close_sep(sep)
+    close_sep(sep)
     sep = None
 
     asr = create_asr(device=device, model_dir=asr_model_dir.strip() or None)
@@ -312,6 +253,9 @@ def run_full_sep(
         "split": split,
         "backend": backend,
         "n_items": len(items),
+        "catalog_n": int(catalog_n),
+        "limit": int(limit or 0),
+        "partial": bool(limit and int(limit) > 0),
         "n_ok": len(ok_rows),
         "n_fail": fail_n,
         "n_no_wake": sum(1 for r in ok_rows if r.get("metric") == "no_wake"),
@@ -356,9 +300,9 @@ def main() -> None:
         os.environ["VM_RETRY_FAILED"] = "1"
 
     vm_out = Path(args.vm_out) if args.vm_out else default_vm_out()
-    items = load_items(vm_out, args.split)
-    if args.limit > 0:
-        items = items[: args.limit]
+    items_all = load_items(vm_out, args.split)
+    catalog_n = len(items_all)
+    items = items_all[: args.limit] if args.limit > 0 else items_all
     backend = "onnx" if args.stage == "s1" else "cv"
     run_full_sep(
         stage=args.stage,
@@ -370,6 +314,8 @@ def main() -> None:
         max_sep_sec=args.max_sep_sec,
         device=args.device,
         asr_model_dir=args.asr_model_dir,
+        catalog_n=catalog_n,
+        limit=int(args.limit or 0),
     )
 
 
