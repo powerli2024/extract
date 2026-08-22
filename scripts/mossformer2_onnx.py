@@ -188,6 +188,7 @@ class MossFormer2Separator:
         self._init_error = ""
 
         onnx_path = resolve_onnx_path()
+        gpu_mem_mb = _detect_gpu_memory_mb()
 
         # provider 选择
         preferred = os.environ.get("MOSS_ONNX_DEVICE", "").strip().lower()
@@ -197,25 +198,22 @@ class MossFormer2Separator:
         elif _ORT_GPU:
             # do_copy_in_default_stream=False 是关键：允许不同 session 的
             # compute stream 并行执行，而不被默认流串行化。
+            cuda_opts: dict = {
+                "device_id": 0,
+                "arena_extend_strategy": "kNextPowerOfTwo",
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "do_copy_in_default_stream": False,
+            }
+            # gpu_mem_limit=None 会让部分 ORT 版本在创建 CUDA EP 时失败；探测失败则省略该键
+            if gpu_mem_mb > 0:
+                cuda_opts["gpu_mem_limit"] = int(
+                    float(os.environ.get("MOSS_GPU_FRAC", "0.85"))
+                    * gpu_mem_mb
+                    * 1024
+                    * 1024
+                )
             self._providers = [
-                (
-                    "CUDAExecutionProvider",
-                    {
-                        "device_id": 0,
-                        "arena_extend_strategy": "kNextPowerOfTwo",
-                        "cudnn_conv_algo_search": "HEURISTIC",
-                        "do_copy_in_default_stream": False,
-                        # 允许 ORT 使用更大显存池
-                        "gpu_mem_limit": int(
-                            float(os.environ.get("MOSS_GPU_FRAC", "0.85"))
-                            * _detect_gpu_memory_mb()
-                            * 1024
-                            * 1024
-                        )
-                        if _detect_gpu_memory_mb() > 0
-                        else None,
-                    },
-                ),
+                ("CUDAExecutionProvider", cuda_opts),
                 "CPUExecutionProvider",
             ]
             self._use_gpu = True
@@ -232,7 +230,7 @@ class MossFormer2Separator:
                 self._num_sessions = max(1, int(user_val))
             else:
                 # 自动：4090 系列 → 3 sessions；≥16GB → 3；≥8GB → 2；其余 1
-                total_mb = _detect_gpu_memory_mb()
+                total_mb = gpu_mem_mb
                 gpu_name = ""
                 try:
                     import torch
@@ -467,13 +465,15 @@ class MossFormer2Separator:
         return [results[i] for i in range(n)]
 
     def release_gpu(self) -> None:
-        """回收 GPU 显存（清空 ONNX arena）。"""
-        for s in self._sessions:
-            try:
-                # 释放 ORT 内部 allocator arena
-                pass  # ORT Python API 无直接 arena free；依赖 gc
-            except Exception:
-                pass
+        """尽量回收 GPU 显存。
+
+        ONNX Runtime Python 没有公开的 CUDA arena free API；本函数删除
+        InferenceSession 引用并 gc，再清 PyTorch cache。调用后需重新构造
+        separator 才能推理。
+        """
+        sessions = getattr(self, "_sessions", None) or []
+        self._sessions = []
+        del sessions
         try:
             import gc
 

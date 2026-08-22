@@ -64,12 +64,10 @@ def link_or_copy(src: Path, dst: Path) -> None:
 
 
 def ps4_ready(ps4_dir: Path) -> bool:
+    """PS4Extractor 只认 checkpoint_epoch037.pt；任意 checkpoint*.pt 不算就绪。"""
     ckpt = ps4_dir / "checkpoint_epoch037.pt"
-    if not ckpt.is_file():
-        ckpts = sorted(ps4_dir.glob("checkpoint*.pt"))
-        if not ckpts:
-            return False
-    return (ps4_dir / "inference.py").is_file()
+    inf = ps4_dir / "inference.py"
+    return ckpt.is_file() and inf.is_file()
 
 
 def download_ps4(ps4_dir: Path) -> None:

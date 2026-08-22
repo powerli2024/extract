@@ -17,6 +17,7 @@ from paths import (
     default_test_cohort_dir,
     default_ve_out,
     ensure_dir,
+    normalize_presence_label,
     setup_sys_path,
 )
 from presence_encoder import create_presence_encoder
@@ -38,8 +39,16 @@ def stratified_limit(samples: list[dict[str, Any]], limit: int) -> list[dict[str
     """按 pos/neg 分层，避免 jsonl 前 N 条全是 pos 导致 RR 虚假为 1。"""
     if limit <= 0 or len(samples) <= limit:
         return samples
-    pos = [r for r in samples if r.get("split") == "pos" or r.get("label") == "present"]
-    neg = [r for r in samples if r.get("split") == "neg" or r.get("label") == "absent"]
+    pos = [
+        r for r in samples
+        if r.get("split") == "pos"
+        or r.get("label") in ("present", "pos")
+    ]
+    neg = [
+        r for r in samples
+        if r.get("split") == "neg"
+        or r.get("label") in ("absent", "neg")
+    ]
     if not neg:
         print("[WARN] 无 neg/absent，LIMIT 下 RR/FAR 无意义", flush=True)
         return samples[:limit]
@@ -75,8 +84,14 @@ def sweep_thresholds(
     target_frr: float = 0.02,
     select_by: str = "contest",
 ) -> dict[str, Any]:
-    presents = sorted([s for lab, s in scores if lab == "present"])
-    absents = sorted([s for lab, s in scores if lab == "absent"])
+    def _lab(lab: object) -> str | None:
+        try:
+            return normalize_presence_label(lab)
+        except KeyError:
+            return None
+
+    presents = sorted([s for lab, s in scores if _lab(lab) == "present"])
+    absents = sorted([s for lab, s in scores if _lab(lab) == "absent"])
     n_p, n_a = len(presents), len(absents)
     if n_p == 0:
         raise SystemExit("无 present 样本，无法校准")
@@ -354,11 +369,12 @@ def main() -> int:
         pr = gate.score(
             enroll, cmd, enroll_key=it["uid"], sr=sr, save_dir=save_dir
         )
-        scored.append((it["label"], pr.score))
+        lab = normalize_presence_label(it.get("label"), split=it.get("split"))
+        scored.append((lab, pr.score))
         detail.append(
             {
                 "uid": it["uid"],
-                "label": it["label"],
+                "label": lab,
                 "split": it["split"],
                 "lang": it.get("lang"),
                 "wake_text": it.get("wake_text"),
@@ -382,8 +398,8 @@ def main() -> int:
         if not (0.0 < holdout_frac < 0.9):
             raise SystemExit("--holdout-frac 须在 (0, 0.9)")
         rng = _rnd.Random(int(args.holdout_seed))
-        pos_d = [r for r in detail if r.get("label") == "present"]
-        neg_d = [r for r in detail if r.get("label") == "absent"]
+        pos_d = [r for r in detail if normalize_presence_label(r.get("label"), split=r.get("split")) == "present"]
+        neg_d = [r for r in detail if normalize_presence_label(r.get("label"), split=r.get("split")) == "absent"]
         rng.shuffle(pos_d)
         rng.shuffle(neg_d)
         n_ho_p = max(1, int(round(len(pos_d) * holdout_frac)))
@@ -404,7 +420,11 @@ def main() -> int:
             raise SystemExit("holdout 后校准子集过小")
 
     scored_calib = [
-        (str(r["label"]), float(r["presence_score"])) for r in calib_detail
+        (
+            normalize_presence_label(r.get("label"), split=r.get("split")),
+            float(r["presence_score"]),
+        )
+        for r in calib_detail
     ]
     cal = sweep_thresholds(
         scored_calib, target_frr=args.target_frr, select_by=args.select_by
@@ -478,7 +498,7 @@ def main() -> int:
         n_p = n_a = n_fr = n_fa = 0
         for r in holdout_detail:
             s = float(r["presence_score"])
-            if r.get("label") == "present":
+            if normalize_presence_label(r.get("label"), split=r.get("split")) == "present":
                 n_p += 1
                 if s < thr_v:
                     n_fr += 1
@@ -549,7 +569,7 @@ def main() -> int:
                         thr_meta=ls,
                     )
                     s = float(r["presence_score"])
-                    if r.get("label") == "present":
+                    if normalize_presence_label(r.get("label"), split=r.get("split")) == "present":
                         n_p += 1
                         if s < thr_v:
                             n_fr += 1

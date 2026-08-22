@@ -49,7 +49,7 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 | `VE_ROOT` | `/root/extract/ve` | 代码根 |
 | `PYTHONPATH` | `$VE_ROOT/scripts:$VE_ROOT/../scripts` | VE 脚本 + 同仓 Moss ONNX |
 | `DATA_DIR` | `/root/autodl-tmp/datasetA` | CMD |
-| `BEST_SEP_DIR` | `/root/autodl-tmp/pos_neg/best_sep` | enroll |
+| `BEST_SEP_DIR` | 自行指定；未设则扫描 `pos_neg/best_sep`、`kws_sep/best_sep` | 干净 KWS enroll |
 | `VE_MODEL_DIR` | `/root/autodl-tmp/ve_models` | 声纹 / PS4 / wesep |
 | `VE_OUT` | 不设则 `run_all` → `ve_${PIPELINE}_{vad\|novad}` | 本轮产物 |
 | `VE_OUT_BASE` | `/root/autodl-tmp/ve` | 旧兼容 |

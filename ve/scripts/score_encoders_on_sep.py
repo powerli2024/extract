@@ -34,6 +34,7 @@ from paths import (
     default_vblink_dir,
     default_ve_out,
     ensure_dir,
+    normalize_presence_label,
     setup_sys_path,
 )
 from presence_encoder import create_presence_encoder
@@ -265,7 +266,10 @@ def main() -> int:
             for row in it:
                 uid = str(row["uid"])
                 split = str(row.get("split", "x"))
-                label = str(row.get("label", "present" if split == "pos" else "absent"))
+                try:
+                    label = normalize_presence_label(row.get("label"), split=split)
+                except KeyError:
+                    label = "present" if str(split) == "pos" else "absent"
                 if uid not in enroll_cache:
                     ew, sr = load_audio(row["enroll_wav"])
                     if args.enroll_vad:

@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from audio_io import cosine_sim, peak_normalize, save_audio, vad_crop_speech
+from audio_io import cosine_sim, is_oom, peak_normalize, save_audio, vad_crop_speech
 from paths import default_moss_onnx_path, extract_root, setup_sys_path
 from presence_encoder import PresenceEncoder
 
@@ -51,6 +51,8 @@ class PresenceResult:
     n_windows: int = 0
     veto_score: float | None = None
     veto_backend: str | None = None
+    sep_failed: bool = False
+    sep_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -92,6 +94,9 @@ class PresenceResult:
             d["z_test"] = round(self.z_test, 6)
         if self.enroll_vad is not None:
             d["enroll_vad"] = self.enroll_vad
+        if self.sep_failed:
+            d["sep_failed"] = True
+            d["sep_error"] = self.sep_error or ""
         return d
 
 
@@ -190,6 +195,8 @@ class PresenceGate:
         self._enroll_cache: dict[str, np.ndarray] = {}
         self._enroll_vad_meta: dict[str, dict] = {}
         self._veto_enroll_cache: dict[str, np.ndarray] = {}
+        self._last_sep_error: str | None = None
+        self._sep_failed: bool = False
 
         # 归一化：优先 score_normalizer；否则由 enroll/test bank 推断
         if score_normalizer is not None:
@@ -249,19 +256,29 @@ class PresenceGate:
                 np.asarray(s2, dtype=np.float32).reshape(-1),
             )
         except Exception as e:
-            print(f"[WARN] presence sep failed: {e}", flush=True)
+            if isinstance(e, MemoryError) or is_oom(e):
+                raise
+            msg = f"{type(e).__name__}: {e}"
+            print(f"[ERR] presence sep failed: {msg}", flush=True)
+            self._last_sep_error = msg
+            self._sep_failed = True
             return None
 
     def _sep_streams(self, cmd: np.ndarray, sr: int) -> dict[str, np.ndarray]:
         """按 sep_depth 级联分离，保留所有中间轨（含 mix）。"""
         mix = np.asarray(cmd, dtype=np.float32).reshape(-1)
         streams: dict[str, np.ndarray] = {"mix": mix}
+        self._sep_failed = False
+        self._last_sep_error = None
         if self.sep_depth < 1 or self.separator is None:
             return streams
 
         # depth 1：对 mix 分离
         pair = self._separate_one(mix, sr)
         if pair is None:
+            if not self._sep_failed:
+                self._sep_failed = True
+                self._last_sep_error = self._last_sep_error or "separator returned no streams"
             return streams
         s1, s2 = pair
         streams["d1_spk1"] = s1
@@ -478,6 +495,8 @@ class PresenceGate:
             n_windows=n_windows,
             veto_score=veto_score,
             veto_backend=veto_backend,
+            sep_failed=bool(self._sep_failed),
+            sep_error=self._last_sep_error,
         )
         return pr, streams, e
 

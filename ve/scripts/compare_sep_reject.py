@@ -29,6 +29,7 @@ from paths import (
     default_test_cohort_dir,
     default_ve_out,
     ensure_dir,
+    normalize_presence_label,
     setup_sys_path,
 )
 from presence_encoder import create_presence_encoder
@@ -112,8 +113,14 @@ def main() -> int:
     if args.limit and args.limit > 0:
         samples = stratified_limit(samples, int(args.limit))
 
-    n_pos = sum(1 for r in samples if r.get("label") == "present" or r.get("split") == "pos")
-    n_neg = sum(1 for r in samples if r.get("label") == "absent" or r.get("split") == "neg")
+    n_pos = sum(
+        1 for r in samples
+        if normalize_presence_label(r.get("label"), split=r.get("split")) == "present"
+    )
+    n_neg = sum(
+        1 for r in samples
+        if normalize_presence_label(r.get("label"), split=r.get("split")) == "absent"
+    )
     print(f"[INFO] out={ve_out}")
     print(
         f"[INFO] samples={len(samples)} (pos≈{n_pos} neg≈{n_neg}) "
@@ -218,11 +225,12 @@ def main() -> int:
             pr = gate.score(
                 enroll, cmd, enroll_key=uid, sr=sr, save_dir=save_dir
             )
-            scored[d].append((it["label"], pr.score))
+            lab = normalize_presence_label(it.get("label"), split=split)
+            scored[d].append((lab, pr.score))
             details[d].append(
                 {
                     "uid": uid,
-                    "label": it["label"],
+                    "label": lab,
                     "split": split,
                     "arm": DEPTH_LABEL.get(d, f"d{d}"),
                     **pr.to_dict(),

@@ -12,7 +12,6 @@ if [[ -d /root/autodl-tmp ]]; then
   export VE_OUT="${VE_OUT:-/root/autodl-tmp/ve}"
   export VE_MODEL_DIR="${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}"
   export DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-  export BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
   export HF_HOME="${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
   export TORCH_HOME="${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
   export MODELSCOPE_CACHE="${MODELSCOPE_CACHE:-/root/autodl-tmp/cache/modelscope}"
@@ -22,7 +21,22 @@ else
   export VE_OUT="${VE_OUT:-$ROOT/../ve_out}"
   export VE_MODEL_DIR="${VE_MODEL_DIR:-$ROOT/../ve_models}"
   export DATA_DIR="${DATA_DIR:-$ROOT/../datasetA}"
-  export BEST_SEP_DIR="${BEST_SEP_DIR:-$ROOT/../pos_neg/best_sep}"
+fi
+
+# 干净 KWS enroll：已设 BEST_SEP_DIR 则用；否则选第一个现成目录，仍可稍后覆盖
+if [[ -z "${BEST_SEP_DIR:-}" ]]; then
+  for c in \
+    /root/autodl-tmp/pos_neg/best_sep \
+    /root/autodl-tmp/kws_sep/best_sep \
+    /root/autodl-tmp/best_sep \
+    "$ROOT/../pos_neg/best_sep" \
+    "$ROOT/../kws_sep/best_sep"
+  do
+    if [[ -f "$c/index.jsonl" || -d "$c/pos" ]]; then
+      export BEST_SEP_DIR="$c"
+      break
+    fi
+  done
 fi
 
 if [[ -z "${OMP_NUM_THREADS:-}" || ! "${OMP_NUM_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
@@ -159,6 +173,7 @@ export PYTHONPATH="$ROOT/scripts:${ROOT}/../scripts:${PYTHONPATH:-}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export MOSS_ONNX_PATH="${MOSS_ONNX_PATH:-/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx}"
 export WESEP_ROOT="${WESEP_ROOT:-$VE_MODEL_DIR/wesep}"
+export BEST_SEP_DIR="${BEST_SEP_DIR:-}"
 
 if [[ ! -f "$ROOT/.env_ve" ]]; then
   cat > "$ROOT/.env_ve" <<EOF

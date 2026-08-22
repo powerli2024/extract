@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -30,7 +31,20 @@ try:
 except ImportError:
     classify_v2 = None  # T1 对照不需要 xlsx；openpyxl 未装时跳过 v2 标签
 
-DEFAULT_SSSSS = Path(r"d:\media\datasetA\sssss")
+
+def default_sssss_dir() -> Path:
+    env = os.environ.get("SSSSS_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cands = [
+        Path("/root/autodl-tmp/datasetA/sssss"),
+        Path("/root/autodl-tmp/sssss"),
+        Path(r"d:\media\datasetA\sssss"),
+    ]
+    for c in cands:
+        if c.is_dir():
+            return c
+    return cands[0]
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -138,7 +152,12 @@ def extra_counts(rows, pred) -> dict[str, int]:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="T1/T4 离线真实 contest")
-    p.add_argument("--sssss", type=Path, default=DEFAULT_SSSSS)
+    p.add_argument(
+        "--sssss",
+        type=Path,
+        default=default_sssss_dir(),
+        help="sssss 离线目录；也可用 SSSSS_DIR（Linux/AutoDL 常见: /root/autodl-tmp/datasetA/sssss）",
+    )
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--alt-asr", type=Path, default=None,
                    help="T1 另一套 asr jsonl/json（uid+cer）；门控锁死")
@@ -148,6 +167,11 @@ def main() -> int:
     args = p.parse_args()
 
     sssss = args.sssss.expanduser().resolve()
+    if not sssss.is_dir():
+        raise SystemExit(
+            f"sssss 目录不存在: {sssss}\n"
+            "请传 --sssss 或设置 SSSSS_DIR（不要依赖 Windows 默认路径）"
+        )
     rows = load_locked_rows(sssss)
     locked = contest_metrics(rows, locked_pred)
     cosine_only = contest_metrics(rows, lambda r: r["base_rej"])

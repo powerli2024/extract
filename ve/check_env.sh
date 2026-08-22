@@ -11,7 +11,7 @@ export VE_ROOT="${VE_ROOT:-$ROOT}"
 export VE_OUT="${VE_OUT:-/root/autodl-tmp/ve}"
 export VE_MODEL_DIR="${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}"
 export DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-export BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
+# 干净 KWS：未设 BEST_SEP_DIR 时由 build_manifest 扫描，不写死 autodl 路径
 export PS4_WEIGHTS="${PS4_WEIGHTS:-$VE_MODEL_DIR/PS4/checkpoint_epoch037.pt}"
 export MOSS_ONNX_PATH="${MOSS_ONNX_PATH:-/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx}"
 export WESEP_ROOT="${WESEP_ROOT:-$VE_MODEL_DIR/wesep}"
@@ -87,10 +87,12 @@ for extra in (
     if extra and Path(extra).is_dir() and str(extra) not in sys.path:
         sys.path.append(str(extra))
 
+from paths import default_best_sep, looks_like_best_sep
+
 ve_out = Path(os.environ.get("VE_OUT", "/root/autodl-tmp/ve"))
 model = Path(os.environ.get("VE_MODEL_DIR", "/root/autodl-tmp/ve_models"))
 data = Path(os.environ.get("DATA_DIR", "/root/autodl-tmp/datasetA"))
-best = Path(os.environ.get("BEST_SEP_DIR", "/root/autodl-tmp/pos_neg/best_sep"))
+best = default_best_sep()
 ps4_dir = model / "PS4"
 ps4 = Path(os.environ.get("PS4_WEIGHTS", str(ps4_dir / "checkpoint_epoch037.pt")))
 inf = ps4_dir / "inference.py"
@@ -113,8 +115,8 @@ check(
 )
 check(
     f"BEST_SEP {best}",
-    best.is_dir() and (best / "index.jsonl").is_file(),
-    "同步 pos_neg/best_sep → /root/autodl-tmp/pos_neg/best_sep",
+    looks_like_best_sep(best),
+    "export BEST_SEP_DIR=/path/to/best_sep  （sep 产物：index.jsonl 或 pos/*.wav）",
 )
 
 if need_ps4:

@@ -12,7 +12,6 @@ export VE_MODEL_DIR="$MODEL_DIR"
 mkdir -p "$MODEL_DIR"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python)}"
 DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
 
 if [[ -f /etc/network_turbo ]]; then
   # shellcheck disable=SC1091
@@ -25,7 +24,7 @@ mkdir -p "$HF_HOME" "$MODELSCOPE_CACHE"
 
 echo "[INFO] MODEL_DIR=$MODEL_DIR"
 echo "[INFO] DATA_DIR=$DATA_DIR"
-echo "[INFO] BEST_SEP_DIR=$BEST_SEP_DIR"
+echo "[INFO] BEST_SEP_DIR=${BEST_SEP_DIR:-"(auto: pos_neg/best_sep 或 kws_sep/best_sep)"}"
 echo "[INFO] HF_ENDPOINT=$HF_ENDPOINT"
 
 check_data() {
@@ -39,10 +38,14 @@ check_data() {
 }
 check_data "datasetA" "$DATA_DIR" \
   "请将仓库 datasetA/ 同步或软链到 /root/autodl-tmp/datasetA（勿放系统盘）"
-check_data "best_sep" "$BEST_SEP_DIR" \
-  "请将 pos_neg/best_sep/ 同步或软链到 /root/autodl-tmp/pos_neg/best_sep"
-if [[ -d "$BEST_SEP_DIR" && ! -f "$BEST_SEP_DIR/index.jsonl" ]]; then
-  echo "[WARN] best_sep 缺 index.jsonl: $BEST_SEP_DIR/index.jsonl"
+if [[ -n "${BEST_SEP_DIR:-}" ]]; then
+  check_data "best_sep" "$BEST_SEP_DIR" \
+    "export BEST_SEP_DIR=/path/to/best_sep（sep 产物）"
+  if [[ -d "$BEST_SEP_DIR" && ! -f "$BEST_SEP_DIR/index.jsonl" ]]; then
+    echo "[WARN] best_sep 缺 index.jsonl: $BEST_SEP_DIR/index.jsonl"
+  fi
+else
+  echo "[INFO] BEST_SEP_DIR 未设；build_manifest 将扫描 pos_neg/best_sep 与 kws_sep/best_sep"
 fi
 
 link_if_missing() {
@@ -55,7 +58,9 @@ link_if_missing() {
 }
 if [[ -d /root/autodl-tmp ]]; then
   link_if_missing "$DATA_DIR" "$ROOT/../datasetA"
-  link_if_missing "$BEST_SEP_DIR" "$ROOT/../pos_neg/best_sep"
+  if [[ -n "${BEST_SEP_DIR:-}" ]]; then
+    link_if_missing "$BEST_SEP_DIR" "$ROOT/../pos_neg/best_sep"
+  fi
 fi
 
 # 确保 huggingface_hub 可用

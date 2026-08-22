@@ -21,6 +21,7 @@ from paths import (
     default_data_dir,
     default_ve_out,
     ensure_dir,
+    require_best_sep,
     setup_sys_path,
 )
 
@@ -179,7 +180,12 @@ def build_items(
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="构建 VE enrollment/cmd manifest")
     p.add_argument("--data-dir", type=Path, default=None)
-    p.add_argument("--best-sep", type=Path, default=None)
+    p.add_argument(
+        "--best-sep",
+        type=Path,
+        default=None,
+        help="干净 KWS enroll 目录（也可用 BEST_SEP_DIR）；须含 index.jsonl 或 pos/*.wav",
+    )
     p.add_argument("--out-dir", type=Path, default=None, help="默认 VE_OUT/manifest")
     p.add_argument("--splits", default="pos,neg")
     return p.parse_args()
@@ -188,7 +194,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     data_dir = (args.data_dir or default_data_dir()).resolve()
-    best_sep = (args.best_sep or default_best_sep()).resolve()
+    best_sep = require_best_sep(args.best_sep or default_best_sep())
     out_dir = (args.out_dir or (default_ve_out() / "manifest")).resolve()
     ensure_dir(out_dir)
     splits = [s.strip() for s in args.splits.split(",") if s.strip()]

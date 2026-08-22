@@ -2,7 +2,7 @@
 
 **当前提交默认是 Presence + mix ASR，不是 ps4。** 环境：conda `ve`（[`SETUP.md`](SETUP.md)）。最优流水线见 [`CURRENT.md`](CURRENT.md)。
 
-KWS 八阶段分离不在本分支：用 extract **`sep`** 写出 `best_sep`，本目录只读 enroll。
+KWS 八阶段分离不在本分支：用 extract **`sep`** 写出 `best_sep`，本目录只读 enroll。路径用 `BEST_SEP_DIR` 或 `--best-sep` 自行指定（例如 `/root/autodl-tmp/kws_sep/best_sep`）。
 
 **Verify-then-Extract**：声纹判断 CMD 是否存在该说话人；**仅「人不在」时拒识**；在场则按所选方案提取目标语音。
 
@@ -12,7 +12,7 @@ KWS 八阶段分离不在本分支：用 extract **`sep`** 写出 `best_sep`，�
 
 | 项 | 约定 |
 |----|------|
-| Enroll | `pos_neg/best_sep/{split}/{uid}.wav`（干净 KWS） |
+| Enroll | `BEST_SEP_DIR/{split}/{uid}.wav`（干净 KWS；未设则扫描常见 best_sep） |
 | CMD | `datasetA/{pos,neg}/cmd_*.wav` |
 | 标签 | pos=`present`，neg=`absent` |
 | 拒识 | **仅** `presence_score < thr` → `reject_reason=speaker_absent` |

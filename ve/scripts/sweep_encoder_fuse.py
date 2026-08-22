@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from itertools import combinations
 from pathlib import Path
@@ -216,14 +217,27 @@ def align_pair(
     return sp, ss, y
 
 
+def default_fuse_reports_dir() -> Path:
+    env = os.environ.get("VE_ENCODER_CMP_REPORTS", "").strip()
+    if env:
+        return Path(env).expanduser()
+    cands = [
+        Path("/root/autodl-tmp/ve_encoder_cmp/reports"),
+        Path(r"D:\media\qqqqqqqqqqqqqq\ve_encoder_cmp_reports\ve_encoder_cmp\reports"),
+    ]
+    for c in cands:
+        if c.is_dir():
+            return c
+    return cands[0]
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="精确离线扫描 encoder 融合规则")
     p.add_argument(
         "--reports-dir",
         type=Path,
-        default=Path(
-            r"D:\media\qqqqqqqqqqqqqq\ve_encoder_cmp_reports\ve_encoder_cmp\reports"
-        ),
+        default=default_fuse_reports_dir(),
+        help="encoder×arm 的 reports 目录；也可用 VE_ENCODER_CMP_REPORTS",
     )
     p.add_argument("--out", type=Path, default=None)
     p.add_argument(
@@ -250,7 +264,11 @@ def main() -> int:
     args = parse_args()
     reports = Path(args.reports_dir).resolve()
     if not reports.is_dir():
-        raise SystemExit(f"reports-dir 不存在: {reports}")
+        raise SystemExit(
+            f"reports-dir 不存在: {reports}\n"
+            "请传 --reports-dir 或设置 VE_ENCODER_CMP_REPORTS"
+            "（Linux/AutoDL 常见: /root/autodl-tmp/ve_encoder_cmp/reports）"
+        )
 
     arms = [x.strip() for x in args.arms.split(",") if x.strip()]
     cells = [(e, a) for e, a in list_cells(reports) if a in arms]

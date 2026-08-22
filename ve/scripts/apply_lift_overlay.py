@@ -55,14 +55,37 @@ def _row_id(r: dict[str, Any]) -> int | None:
     return None
 
 
-def overlay_reason(r: dict[str, Any], pred_fn) -> str:
+def overlay_reason(
+    r: dict[str, Any],
+    *,
+    use_text: bool,
+    use_camp: bool,
+    use_window: bool,
+    veto_margin: float,
+) -> str:
     if r.get("base_rej"):
         return "speaker_absent"
-    if not pred_fn(r):
-        return ""
-    if extra_reject_text(r["score"], r["thr"], r.get("hyp")):
-        return "speaker_absent"
+    if use_text and extra_reject_text(r["score"], r["thr"], r.get("hyp")):
+        return "len_and_nontask_gray"
+    if use_camp and camp_veto(r["score"], r.get("camp"), r["thr"], margin=veto_margin):
+        return "camp_veto"
+    if use_window and window_veto(
+        r.get("best_window_score"), r.get("second_window_score"), r["thr"],
+        margin=veto_margin,
+    ):
+        return "window_veto"
     return "speaker_absent"
+
+
+def extra_reject_tag(*, use_text: bool, use_camp: bool, use_window: bool) -> str:
+    parts: list[str] = []
+    if use_text:
+        parts.append("len_and_nontask_gray")
+    if use_camp:
+        parts.append("camp_veto")
+    if use_window:
+        parts.append("window_veto")
+    return "+".join(parts) if parts else "none"
 
 
 def write_result_json(
@@ -70,6 +93,8 @@ def write_result_json(
     rows: list[dict[str, Any]],
     pred_fn,
     metrics: dict[str, Any],
+    *,
+    extra_reject: str = "len_and_nontask_gray",
 ) -> None:
     """竞赛 pos 列表：拒识 content 空、cer=1；接受写 hyp。"""
     pos = [r for r in rows if r.get("split") == "pos"]
@@ -97,7 +122,7 @@ def write_result_json(
         "contest": float(metrics["contest"]),
         "zh_thr": ZH_THR,
         "en_thr": EN_THR,
-        "extra_reject": "len_and_nontask_gray",
+        "extra_reject": extra_reject,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -207,9 +232,15 @@ def main() -> int:
     m1 = contest_metrics(rows, pred)
     n_extra_pos = sum(1 for r in rows if r["split"] == "pos" and (not r["base_rej"]) and pred(r))
     n_extra_neg = sum(1 for r in rows if r["split"] == "neg" and (not r["base_rej"]) and pred(r))
+    # overlay 仍拒的原误拒 pos 不需要 ASR；只统计 overlay 新放行且从未接受过的 pos
     n_need_asr = sum(
         1 for r in rows
-        if r["split"] == "pos" and (not r["base_rej"]) and (not r["orig_accept"])
+        if r["split"] == "pos" and (not pred(r)) and (not r["orig_accept"])
+    )
+    extra_tag = extra_reject_tag(
+        use_text=not args.no_text,
+        use_camp=not args.no_camp,
+        use_window=bool(args.window_veto),
     )
     tag = args.tag or ("locked_text" if args.locked_thr else "holdout_text")
     out = {
@@ -225,6 +256,7 @@ def main() -> int:
         "n_extra_pos": n_extra_pos,
         "n_extra_neg": n_extra_neg,
         "n_need_asr": n_need_asr,
+        "extra_reject": extra_tag,
         "note": "n_need_asr>0 时新放行 pos 仍按 CER=1 保守估计",
         "go_vs_file": bool((m1["contest"] - m_file["contest"]) >= 0.005 and n_extra_pos <= 5),
     }
@@ -253,7 +285,13 @@ def main() -> int:
             "score": r.get("score"),
             "thr": r.get("thr"),
             "reject": rej,
-            "reject_reason": overlay_reason(r, pred) if rej else "",
+            "reject_reason": overlay_reason(
+                r,
+                use_text=not args.no_text,
+                use_camp=not args.no_camp,
+                use_window=bool(args.window_veto),
+                veto_margin=float(args.veto_margin),
+            ) if rej else "",
             "extra_reject": bool((not r["base_rej"]) and rej),
             "hyp": r.get("hyp") or "",
             "cer": 1.0 if (r.get("split") == "pos" and rej) else r.get("cer"),
@@ -261,7 +299,7 @@ def main() -> int:
     write_jsonl(od / f"{tag}_rows.jsonl", dump_rows)
     if args.write_result or tag == "submit":
         rp = args.result_json or (ve / "reports" / "submit" / "result.json")
-        write_result_json(rp, rows, pred, m1)
+        write_result_json(rp, rows, pred, m1, extra_reject=extra_tag)
         print(f"[OK] result.json → {rp} contest={round(m1['contest'], 6)} RR={round(m1['rr'], 6)}")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print(f"[OK] {jp}")

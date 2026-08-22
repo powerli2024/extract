@@ -60,7 +60,6 @@ LIMIT="${LIMIT:-0}"
 MODE="${MODE:-matrix}"
 VP_OUT="${VP_OUT:-/root/autodl-tmp/vp}"
 DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
 ENCODERS="${ENCODERS:-eres2netv2,campplus,resnet34_lm}"
 ARMS="${ARMS:-no_sep,sep_once,sep_multi}"
 VAD_MODES="${VAD_MODES:-0,1}"
@@ -77,8 +76,10 @@ if [[ ! -f "${SAMPLES:-}" ]]; then
     SAMPLES="$VP_OUT/manifest/samples.jsonl"
   else
     echo ">>> build_manifest <<<"
+    BEST_SEP_ARGS=()
+    [[ -n "${BEST_SEP_DIR:-}" ]] && BEST_SEP_ARGS+=(--best-sep "$BEST_SEP_DIR")
     "$PYTHON_BIN" "$VE_ROOT/scripts/build_manifest.py" \
-      --data-dir "$DATA_DIR" --best-sep "$BEST_SEP_DIR" \
+      --data-dir "$DATA_DIR" "${BEST_SEP_ARGS[@]}" \
       --out-dir "$VP_OUT/manifest"
     SAMPLES="$VP_OUT/manifest/samples.jsonl"
   fi

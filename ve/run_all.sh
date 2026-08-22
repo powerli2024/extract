@@ -39,7 +39,9 @@ PIPELINE（提取后端）
 ════════════════════════════════════════════════════════════
   VE_OUT              输出根；默认 /root/autodl-tmp/ve_${PIPELINE}_${vad|novad}
   DATA_DIR            datasetA；默认 /root/autodl-tmp/datasetA
-  BEST_SEP_DIR        干净 KWS enroll；默认 /root/autodl-tmp/pos_neg/best_sep
+  BEST_SEP_DIR        干净 KWS enroll（sep 产物）。自行指定；未设则扫描
+                      pos_neg/best_sep、kws_sep/best_sep 等现成目录
+                      例: BEST_SEP_DIR=/root/autodl-tmp/kws_sep/best_sep ./run_all.sh
   SAMPLES             可选，跳过重建时指定 samples.jsonl
   DEVICE              默认 cuda:0
   LIMIT               分层抽样条数；0=全量（默认）
@@ -188,7 +190,10 @@ elif [[ -d /root/autodl-tmp/ve_models/wesep/wesep ]]; then
 fi
 
 DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
+BEST_SEP_ARGS=()
+if [[ -n "${BEST_SEP_DIR:-}" ]]; then
+  BEST_SEP_ARGS+=(--best-sep "$BEST_SEP_DIR")
+fi
 DEVICE="${DEVICE:-cuda:0}"
 LIMIT="${LIMIT:-0}"
 TARGET_FRR="${TARGET_FRR:-0.02}"
@@ -276,7 +281,7 @@ echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
 echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
-echo "DATA_DIR=$DATA_DIR BEST_SEP=$BEST_SEP_DIR DEVICE=$DEVICE"
+echo "DATA_DIR=$DATA_DIR BEST_SEP=${BEST_SEP_DIR:-"(auto scan)"} DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
 echo "PYTHON_BIN=$PYTHON_BIN"
 "$PYTHON_BIN" -c "import sys; print('sys.executable=', sys.executable)"
@@ -346,7 +351,7 @@ step() { echo; echo ">>> $* <<<"; }
 step "[1/7] build_manifest"
 "$PYTHON_BIN" "$ROOT/scripts/build_manifest.py" \
   --data-dir "$DATA_DIR" \
-  --best-sep "$BEST_SEP_DIR" \
+  "${BEST_SEP_ARGS[@]}" \
   --out-dir "$VE_OUT/manifest"
 # 对照时复用同一份 samples：若 CALIB_ROOT 尚无 manifest，拷一份
 if [[ ! -f "$CALIB_ROOT/manifest/samples.jsonl" ]]; then

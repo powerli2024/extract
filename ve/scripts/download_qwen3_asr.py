@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """下载 Qwen3-ASR-1.7B（先 HuggingFace，失败自动回退 ModelScope）。
 
-默认下载到 AutoDL 数据盘指定位置：
-    ${VE_ASR_MODEL_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/Qwen3-ASR-1.7B}
+默认下载到 AutoDL 数据盘（与 download_qwen3_asr.sh / run_all.sh / README 一致）：
+    ${ASR_MODEL_DIR:-${QWEN3_ASR_DIR:-/root/autodl-tmp/Qwen3-ASR-1.7B}}
 
 用法:
-    python scripts/download_qwen3_asr.py                        # 默认 1.7B → ve_models/Qwen3-ASR-1.7B
+    python scripts/download_qwen3_asr.py                        # 默认 1.7B → /root/autodl-tmp/Qwen3-ASR-1.7B
     python scripts/download_qwen3_asr.py --source modelscope    # 强制走 ModelScope
     python scripts/download_qwen3_asr.py --model-id Qwen/Qwen3-ASR-2B
 """
@@ -24,11 +24,11 @@ REQUIRED_FILES = ("config.json", "tokenizer_config.json", "generation_config.jso
 
 
 def default_out_dir() -> Path:
-    env = os.environ.get("VE_ASR_MODEL_DIR", "").strip()
-    if env:
-        return Path(env).expanduser()
-    base = os.environ.get("VE_MODEL_DIR", "").strip() or "/root/autodl-tmp/ve_models"
-    return Path(base) / "Qwen3-ASR-1.7B"
+    for key in ("ASR_MODEL_DIR", "QWEN3_ASR_DIR", "VE_ASR_MODEL_DIR"):
+        env = os.environ.get(key, "").strip()
+        if env:
+            return Path(env).expanduser()
+    return Path("/root/autodl-tmp/Qwen3-ASR-1.7B")
 
 
 def verify(out_dir: Path) -> tuple[list[str], bool]:

@@ -48,9 +48,10 @@ fi
 
 if [[ -z "${SAMPLES:-}" || ! -f "$SAMPLES" ]]; then
   DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
-  BEST_SEP_DIR="${BEST_SEP_DIR:-/root/autodl-tmp/pos_neg/best_sep}"
+  BEST_SEP_ARGS=()
+  [[ -n "${BEST_SEP_DIR:-}" ]] && BEST_SEP_ARGS+=(--best-sep "$BEST_SEP_DIR")
   "$PYTHON_BIN" "$ROOT/scripts/build_manifest.py" \
-    --data-dir "$DATA_DIR" --best-sep "$BEST_SEP_DIR" --out-dir "$OUT/manifest"
+    --data-dir "$DATA_DIR" "${BEST_SEP_ARGS[@]}" --out-dir "$OUT/manifest"
   SAMPLES="$OUT/manifest/samples.jsonl"
 fi
 

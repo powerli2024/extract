@@ -8,9 +8,18 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from paths import normalize_presence_label
+
 
 def _pct(n: int, d: int) -> float:
     return round(n / d, 4) if d else 0.0
+
+
+def _row_label(row: dict[str, Any]) -> str | None:
+    try:
+        return normalize_presence_label(row.get("label"), split=row.get("split"))
+    except KeyError:
+        return None
 
 
 def contest_score(rr: float, cer: float) -> float:
@@ -64,10 +73,21 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         n_acc = sum(1 for r in rs if r.get("decision") == "accept")
         n_rej = sum(1 for r in rs if r.get("decision") == "reject")
         n_err = sum(1 for r in rs if r.get("decision") in ("extract_error", "pipeline_error"))
-        label = rs[0].get("label") if rs else None
+        present_rs = [r for r in rs if _row_label(r) == "present"]
+        absent_rs = [r for r in rs if _row_label(r) == "absent"]
+        if present_rs and not absent_rs:
+            label = "present"
+        elif absent_rs and not present_rs:
+            label = "absent"
+        elif present_rs and absent_rs:
+            label = "mixed"
+        else:
+            label = _row_label(rs[0]) if rs else None
         block = {
             "n": n,
             "label": label,
+            "n_present": len(present_rs),
+            "n_absent": len(absent_rs),
             "accept_rate": _pct(n_acc, n),
             "reject_rate": _pct(n_rej, n),
             "error_rate": _pct(n_err, n),
@@ -77,27 +97,31 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 4,
             ),
         }
-        if label == "present":
-            block["frr"] = _pct(n_rej, n)
-            cers = [_pos_cer(r) for r in rs]
+        if present_rs:
+            n_p = len(present_rs)
+            n_p_rej = sum(1 for r in present_rs if r.get("decision") == "reject")
+            block["frr"] = _pct(n_p_rej, n_p)
+            cers = [_pos_cer(r) for r in present_rs]
             known = [c for c in cers if c is not None]
             missing = sum(1 for c in cers if c is None)
             if missing:
-                # 未跑 ASR 时不把 accept 当成 CER=0
                 block["cer"] = None
                 block["cer_note"] = (
-                    f"缺少 asr_cer 的样本 {missing}/{n}；请跑 ./run_asr_cer.sh 后再汇总"
+                    f"缺少 asr_cer 的样本 {missing}/{n_p}；请跑 ./run_asr_cer.sh 后再汇总"
                 )
             else:
-                block["cer"] = round(sum(known) / n, 4) if n else 0.0
-        if label == "absent":
-            block["far"] = _pct(n_acc, n)
-            block["rr"] = _pct(n_rej, n)
+                block["cer"] = round(sum(known) / n_p, 4) if n_p else 0.0
+        if absent_rs:
+            n_a = len(absent_rs)
+            n_a_acc = sum(1 for r in absent_rs if r.get("decision") == "accept")
+            n_a_rej = sum(1 for r in absent_rs if r.get("decision") == "reject")
+            block["far"] = _pct(n_a_acc, n_a)
+            block["rr"] = _pct(n_a_rej, n_a)
         out["splits"][split] = block
 
     # 竞赛总分
-    pos = [r for r in rows if r.get("label") == "present"]
-    neg = [r for r in rows if r.get("label") == "absent"]
+    pos = [r for r in rows if _row_label(r) == "present"]
+    neg = [r for r in rows if _row_label(r) == "absent"]
     rr = _pct(sum(1 for r in neg if r.get("decision") == "reject"), len(neg)) if neg else 0.0
     pos_cers = [_pos_cer(r) for r in pos]
     missing_asr = sum(1 for c in pos_cers if c is None)
@@ -198,8 +222,8 @@ def write_run_reports(
         r
         for r in rows
         if r.get("decision") in ("extract_error", "pipeline_error")
-        or (r.get("label") == "present" and r.get("decision") == "reject")
-        or (r.get("label") == "absent" and r.get("decision") == "accept")
+        or (_row_label(r) == "present" and r.get("decision") == "reject")
+        or (_row_label(r) == "absent" and r.get("decision") == "accept")
     ]
     with (reports_dir / "failures.jsonl").open("w", encoding="utf-8") as f:
         for r in fails:
@@ -222,10 +246,10 @@ def write_run_reports(
     analysis = {
         "n_failures_listed": len(fails),
         "present_rejected": sum(
-            1 for r in rows if r.get("label") == "present" and r.get("decision") == "reject"
+            1 for r in rows if _row_label(r) == "present" and r.get("decision") == "reject"
         ),
         "absent_accepted": sum(
-            1 for r in rows if r.get("label") == "absent" and r.get("decision") == "accept"
+            1 for r in rows if _row_label(r) == "absent" and r.get("decision") == "accept"
         ),
         "extract_errors": sum(1 for r in rows if r.get("decision") == "extract_error"),
     }

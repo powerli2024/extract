@@ -397,9 +397,8 @@ def _asr_one(asr: Optional["Qwen3ASRBackend"], wav: str, language: Optional[str]
     return asr.transcribe_many([audio], language=language, wake_text=context)[0]
 
 
-def process_one(args: argparse.Namespace, sample: dict[str, Any],
-                res: dict[str, Any], wav: str, asr: Optional[Qwen3ASRBackend],
-                norm_ver: str) -> dict[str, Any]:
+def _init_asr_rec(args: argparse.Namespace, sample: dict[str, Any],
+                  res: dict[str, Any], wav: str, norm_ver: str) -> dict[str, Any]:
     rec = base_record(sample, res, norm_ver)
     rec["wav"] = wav
     lang = args.language
@@ -413,6 +412,71 @@ def process_one(args: argparse.Namespace, sample: dict[str, Any],
         "custom" if (getattr(args, "context", None) or "").strip() else
         "none"
     )
+    return rec
+
+
+def _retry_mismatch(args: argparse.Namespace, sample: dict[str, Any],
+                    res: dict[str, Any], wav: str, asr: "Qwen3ASRBackend",
+                    rec: dict[str, Any], hyp: str, lang: Optional[str],
+                    ctx: Optional[str]) -> tuple[str, str]:
+    from lift_common import DOMAIN_CONTEXT, duration_mismatch
+
+    if not getattr(args, "retry_mismatch", False):
+        return hyp, rec.get("asr_pass") or "primary"
+    if not duration_mismatch(hyp, rec.get("dur_sec")):
+        return hyp, rec.get("asr_pass") or "primary"
+    retry_note: dict[str, Any] = {"reason": "duration_mismatch", "hyp0": hyp}
+    pass_name = rec.get("asr_pass") or "primary"
+    already_domain = (
+        (lang == "Chinese")
+        and bool(getattr(args, "domain_context", False))
+    )
+    if not already_domain:
+        hyp1 = _asr_one(asr, wav, "Chinese", DOMAIN_CONTEXT)
+        retry_note["hyp1"] = hyp1
+        if (hyp1 or "").strip():
+            hyp = hyp1
+            pass_name = "retry_decode"
+    mix_wav = sample.get("cmd_wav") or res.get("cmd_wav")
+    still = duration_mismatch(hyp, rec.get("dur_sec"))
+    if still and mix_wav and Path(str(mix_wav)).is_file():
+        mix_p = str(Path(str(mix_wav)).resolve())
+        cur_p = str(Path(wav).resolve())
+        if mix_p != cur_p:
+            hyp2 = _asr_one(asr, mix_p, lang, ctx)
+            retry_note["hyp_mix"] = hyp2
+            if (hyp2 or "").strip():
+                hyp = hyp2
+                pass_name = "retry_mix"
+    rec["retry"] = retry_note
+    return hyp, pass_name
+
+
+def _fill_cer(rec: dict[str, Any], sample: dict[str, Any], hyp: str,
+              t1: float, pass_name: str) -> dict[str, Any]:
+    rec["asr_pass"] = pass_name
+    rec["asr_ms"] = round((time.time() - t1) * 1000, 1)
+    ref = str(sample.get("cmd_text") or "")
+    ref_norm = normalize_for_cer(ref)
+    hyp_norm = normalize_for_cer(hyp)
+    detail = compute_cer(ref_norm, hyp_norm)
+    rec.update({
+        "cmd_text": ref, "ref_norm": ref_norm,
+        "asr_text": hyp, "hyp_norm": hyp_norm,
+        "s": detail["s"], "d": detail["d"], "i": detail["i"], "n": detail["n"],
+        "edit_distance": detail["dist"],
+        "cer": detail["cer"],
+        "ref_aligned": detail["ref_aligned"], "hyp_aligned": detail["hyp_aligned"],
+        "status": "ok" if hyp_norm else "empty_hyp",
+        "error": None,
+    })
+    return rec
+
+
+def process_one(args: argparse.Namespace, sample: dict[str, Any],
+                res: dict[str, Any], wav: str, asr: Optional[Qwen3ASRBackend],
+                norm_ver: str) -> dict[str, Any]:
+    rec = _init_asr_rec(args, sample, res, wav, norm_ver)
     try:
         import librosa
         rec["dur_sec"] = round(float(librosa.get_duration(path=wav)), 3)
@@ -421,59 +485,104 @@ def process_one(args: argparse.Namespace, sample: dict[str, Any],
     t1 = time.time()
     try:
         ctx = _asr_context(args, sample)
+        lang = rec.get("language")
         if args.fake_asr:
             hyp = fake_hyp(str(sample.get("cmd_text") or ""), args.fake_asr)
-            rec["asr_pass"] = "fake"
-        else:
-            from lift_common import DOMAIN_CONTEXT, duration_mismatch
-
-            hyp = _asr_one(asr, wav, lang, ctx)
-            rec["asr_pass"] = "primary"
-            if getattr(args, "retry_mismatch", False) and duration_mismatch(hyp, rec.get("dur_sec")):
-                retry_note: dict[str, Any] = {"reason": "duration_mismatch", "hyp0": hyp}
-                already_domain = (
-                    (lang == "Chinese")
-                    and bool(getattr(args, "domain_context", False))
-                )
-                if not already_domain:
-                    hyp1 = _asr_one(asr, wav, "Chinese", DOMAIN_CONTEXT)
-                    retry_note["hyp1"] = hyp1
-                    if (hyp1 or "").strip():
-                        hyp = hyp1
-                        rec["asr_pass"] = "retry_decode"
-                mix_wav = sample.get("cmd_wav") or res.get("cmd_wav")
-                still = duration_mismatch(hyp, rec.get("dur_sec"))
-                if still and mix_wav and Path(str(mix_wav)).is_file():
-                    mix_p = str(Path(str(mix_wav)).resolve())
-                    cur_p = str(Path(wav).resolve())
-                    if mix_p != cur_p:
-                        hyp2 = _asr_one(asr, mix_p, lang, ctx)
-                        retry_note["hyp_mix"] = hyp2
-                        if (hyp2 or "").strip():
-                            hyp = hyp2
-                            rec["asr_pass"] = "retry_mix"
-                rec["retry"] = retry_note
-        rec["asr_ms"] = round((time.time() - t1) * 1000, 1)
-        ref = str(sample.get("cmd_text") or "")
-        ref_norm = normalize_for_cer(ref)
-        hyp_norm = normalize_for_cer(hyp)
-        detail = compute_cer(ref_norm, hyp_norm)
-        rec.update({
-            "cmd_text": ref, "ref_norm": ref_norm,
-            "asr_text": hyp, "hyp_norm": hyp_norm,
-            "s": detail["s"], "d": detail["d"], "i": detail["i"], "n": detail["n"],
-            "edit_distance": detail["dist"],
-            "cer": detail["cer"],
-            "ref_aligned": detail["ref_aligned"], "hyp_aligned": detail["hyp_aligned"],
-            "status": "ok" if hyp_norm else "empty_hyp",
-            "error": None,
-        })
+            return _fill_cer(rec, sample, hyp, t1, "fake")
+        if asr is None:
+            raise RuntimeError("ASR backend is None")
+        hyp = _asr_one(asr, wav, lang, ctx)
+        rec["asr_pass"] = "primary"
+        hyp, pass_name = _retry_mismatch(args, sample, res, wav, asr, rec, hyp, lang, ctx)
+        return _fill_cer(rec, sample, hyp, t1, pass_name)
     except Exception as e:  # noqa: BLE001
         rec.update({"status": "asr_error", "error": str(e),
                     "traceback": traceback.format_exc(limit=5),
                     "cer": 1.0,
                     "asr_ms": round((time.time() - t1) * 1000, 1)})
-    return rec
+        return rec
+
+
+def process_chunk(args: argparse.Namespace,
+                  chunk: list[tuple[dict[str, Any], dict[str, Any], str]],
+                  asr: Optional[Qwen3ASRBackend],
+                  norm_ver: str) -> list[dict[str, Any]]:
+    """同一 (language, context) 组真正一次 transcribe_many。"""
+    if not chunk:
+        return []
+    if args.fake_asr or asr is None or len(chunk) == 1:
+        return [process_one(args, s, r, w, asr, norm_ver) for s, r, w in chunk]
+
+    from collections import defaultdict
+    import librosa
+
+    prepared: list[dict[str, Any]] = []
+    groups: dict[tuple[Any, Any], list[int]] = defaultdict(list)
+    for i, (sample, res, wav) in enumerate(chunk):
+        rec = _init_asr_rec(args, sample, res, wav, norm_ver)
+        ctx = _asr_context(args, sample)
+        audio = None
+        try:
+            audio, _sr = librosa.load(wav, sr=16000)
+            rec["dur_sec"] = round(float(len(audio)) / 16000.0, 3)
+        except Exception:
+            rec["dur_sec"] = None
+        prepared.append({
+            "sample": sample, "res": res, "wav": wav, "rec": rec,
+            "lang": rec.get("language"), "ctx": ctx, "audio": audio,
+        })
+        groups[(rec.get("language"), ctx)].append(i)
+
+    t1 = time.time()
+    hyps: list[Optional[str]] = [None] * len(chunk)
+    errors: list[Optional[str]] = [None] * len(chunk)
+    try:
+        for (lang, ctx), idxs in groups.items():
+            audios = []
+            valid: list[int] = []
+            for i in idxs:
+                audio = prepared[i]["audio"]
+                if audio is None:
+                    errors[i] = "missing_wav_audio"
+                    continue
+                audios.append(audio)
+                valid.append(i)
+            if not audios:
+                continue
+            texts = list(asr.transcribe_many(audios, language=lang, wake_text=ctx))
+            if len(texts) < len(valid):
+                texts.extend([""] * (len(valid) - len(texts)))
+            for i, text in zip(valid, texts):
+                hyps[i] = text
+    except Exception:
+        return [process_one(args, s, r, w, asr, norm_ver) for s, r, w in chunk]
+
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(prepared):
+        rec = item["rec"]
+        sample, res, wav = item["sample"], item["res"], item["wav"]
+        if errors[i] and hyps[i] is None:
+            rec.update({
+                "status": "asr_error", "error": errors[i],
+                "cer": 1.0,
+                "asr_ms": round((time.time() - t1) * 1000, 1),
+            })
+            out.append(rec)
+            continue
+        try:
+            rec["asr_pass"] = "primary"
+            hyp = hyps[i] or ""
+            hyp, pass_name = _retry_mismatch(
+                args, sample, res, wav, asr, rec, hyp, item["lang"], item["ctx"],
+            )
+            out.append(_fill_cer(rec, sample, hyp, t1, pass_name))
+        except Exception as e:  # noqa: BLE001
+            rec.update({"status": "asr_error", "error": str(e),
+                        "traceback": traceback.format_exc(limit=5),
+                        "cer": 1.0,
+                        "asr_ms": round((time.time() - t1) * 1000, 1)})
+            out.append(rec)
+    return out
 
 
 # ------------------------- 统计汇总 -------------------------
@@ -669,10 +778,12 @@ def run_neg_fa(args: argparse.Namespace) -> int:
             max_new_tokens=args.max_new_tokens, max_batch=max(1, int(args.batch)),
         )
     pbar = tqdm(total=len(tasks), desc="neg-fa") if tasks else None
-    for s, r, wav in tasks:
-        records[s["uid"]] = process_one(args, s, r, wav, asr, norm_ver)
+    for i in range(0, len(tasks), max(1, int(args.batch))):
+        chunk = tasks[i:i + max(1, int(args.batch))]
+        for rec in process_chunk(args, chunk, asr, norm_ver):
+            records[rec["uid"]] = rec
         if pbar is not None:
-            pbar.update(1)
+            pbar.update(len(chunk))
     if pbar is not None:
         pbar.close()
     ordered = [records[s["uid"]] for s, _, _ in tasks if s["uid"] in records]
@@ -804,8 +915,8 @@ def main() -> int:
     pbar = tqdm(total=len(tasks), desc="asr", unit="utt") if tqdm and tasks else None
     for i in range(0, len(tasks), max(1, args.batch)):
         chunk = tasks[i:i + args.batch]
-        for sample, res, wav in chunk:
-            records[sample["uid"]] = process_one(args, sample, res, wav, asr, norm_ver)
+        for rec in process_chunk(args, chunk, asr, norm_ver):
+            records[rec["uid"]] = rec
         if pbar is not None:
             pbar.update(len(chunk))
         if i + len(chunk) >= len(tasks) or (i + len(chunk)) % 50 == 0:

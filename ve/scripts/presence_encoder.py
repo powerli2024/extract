@@ -133,43 +133,59 @@ class ERes2NetV2Encoder(PresenceEncoder):
         ) from last_err
 
     def embed(self, wav: np.ndarray, sr: int = 16000) -> np.ndarray:
+        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+        last_out: Any = None
+        # 优先内存输入，避免批量打分时每条都落盘
+        mem_calls = (
+            lambda: self._sv([wav], output_emb=True),
+            lambda: self._sv([wav], extract_emb=True),
+            lambda: self._sv([{"array": wav, "sampling_rate": int(sr)}], output_emb=True),
+            lambda: self._sv([{"array": wav, "sampling_rate": int(sr)}]),
+            lambda: self._sv([wav]),
+        )
+        for call in mem_calls:
+            try:
+                out = call()
+            except TypeError:
+                continue
+            except Exception:
+                continue
+            last_out = out
+            emb = self._parse_emb(out)
+            if emb is not None:
+                return emb
+
         import soundfile as sf
         import tempfile
 
-        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp = f.name
         try:
             sf.write(tmp, wav, sr)
-            out = None
-            # 兼容不同 modelscope 版本的 embedding API
-            for kwargs in (
-                {"output_emb": True},
-                {"extract_emb": True},
-                {},
-            ):
+            file_calls = (
+                lambda: self._sv([tmp], output_emb=True),
+                lambda: self._sv([tmp], extract_emb=True),
+                lambda: self._sv([tmp]),
+                lambda: self._sv([tmp, tmp]),
+            )
+            for call in file_calls:
                 try:
-                    out = self._sv([tmp], **kwargs) if kwargs else self._sv([tmp, tmp])
-                    break
+                    out = call()
                 except TypeError:
                     continue
                 except Exception:
-                    if not kwargs:
-                        raise
                     continue
-            if out is None:
-                raise RuntimeError("ERes2NetV2 pipeline 调用失败")
+                last_out = out
+                emb = self._parse_emb(out)
+                if emb is not None:
+                    return emb
         finally:
             Path(tmp).unlink(missing_ok=True)
 
-        emb = self._parse_emb(out)
-        if emb is None:
-            # 最后手段：用模型内部 encoder（若暴露）
-            raise RuntimeError(
-                f"ERes2NetV2 输出无 embedding: type={type(out)} "
-                f"keys={list(out) if isinstance(out, dict) else None}"
-            )
-        return emb
+        raise RuntimeError(
+            f"ERes2NetV2 输出无 embedding: type={type(last_out)} "
+            f"keys={list(last_out) if isinstance(last_out, dict) else None}"
+        )
 
     @staticmethod
     def _parse_emb(out: Any) -> np.ndarray | None:
@@ -291,10 +307,19 @@ class WespeakerLocalEncoder(PresenceEncoder):
             print(f"[WARN] set_device({dev}) failed: {e}", flush=True)
 
     def embed(self, wav: np.ndarray, sr: int = 16000) -> np.ndarray:
+        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+        pcm_fn = getattr(self._m, "extract_embedding_from_pcm", None)
+        if callable(pcm_fn):
+            try:
+                import torch
+
+                emb = pcm_fn(torch.from_numpy(wav), int(sr))
+                return np.asarray(emb, dtype=np.float32).reshape(-1)
+            except Exception:
+                pass
         import soundfile as sf
         import tempfile
 
-        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp = f.name
         try:
@@ -302,8 +327,7 @@ class WespeakerLocalEncoder(PresenceEncoder):
             emb = self._m.extract_embedding(tmp)
         finally:
             Path(tmp).unlink(missing_ok=True)
-        arr = np.asarray(emb, dtype=np.float32).reshape(-1)
-        return arr
+        return np.asarray(emb, dtype=np.float32).reshape(-1)
 
 
 def create_presence_encoder(

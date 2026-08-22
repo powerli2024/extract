@@ -69,18 +69,91 @@ def default_data_dir() -> Path:
     return (media_root() / "datasetA").resolve()
 
 
+def looks_like_best_sep(p: Path) -> bool:
+    """干净 KWS enroll 目录：有 index.jsonl，或 pos/neg 下有 wav。"""
+    try:
+        if not p.is_dir():
+            return False
+    except OSError:
+        return False
+    if (p / "index.jsonl").is_file():
+        return True
+    for sub in ("pos", "neg"):
+        d = p / sub
+        try:
+            if d.is_dir() and any(d.glob("*.wav")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def best_sep_candidates() -> list[Path]:
+    """BEST_SEP_DIR 优先，其余为常见 sep 产物位置（含 kws_sep 与 pos_neg）。"""
+    raw: list[Path] = []
+    env = os.environ.get("BEST_SEP_DIR", "").strip()
+    if env:
+        raw.append(Path(env).expanduser())
+    raw.extend(
+        [
+            Path("/root/autodl-tmp/pos_neg/best_sep"),
+            Path("/root/autodl-tmp/kws_sep/best_sep"),
+            Path("/root/autodl-tmp/best_sep"),
+            media_root() / "pos_neg" / "best_sep",
+            media_root() / "kws_sep" / "best_sep",
+            Path("D:/media/pos_neg/best_sep"),
+            Path("D:/media/kws_sep/best_sep"),
+        ]
+    )
+    out: list[Path] = []
+    seen: set[str] = set()
+    for c in raw:
+        try:
+            r = c.resolve()
+        except OSError:
+            continue
+        key = str(r).replace("\\", "/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def default_best_sep() -> Path:
+    """干净 KWS enroll。显式 BEST_SEP_DIR 优先；否则选第一个像 best_sep 的目录。"""
     env = os.environ.get("BEST_SEP_DIR", "").strip()
     if env:
         return Path(env).expanduser().resolve()
-    for c in (
-        Path("/root/autodl-tmp/pos_neg/best_sep"),
-        Path("/root/autodl-tmp/best_sep"),
-        media_root() / "pos_neg" / "best_sep",
-    ):
-        if c.is_dir():
-            return c.resolve()
+    for c in best_sep_candidates():
+        if looks_like_best_sep(c):
+            return c
     return (media_root() / "pos_neg" / "best_sep").resolve()
+
+
+def require_best_sep(p: Path | None = None) -> Path:
+    """校验 enroll 目录；失败时列出可切换的候选。"""
+    chosen = (p or default_best_sep()).resolve()
+    found = [c for c in best_sep_candidates() if looks_like_best_sep(c)]
+    if looks_like_best_sep(chosen):
+        others = [c for c in found if c != chosen]
+        if others:
+            print(
+                "[INFO] 其它干净 KWS 候选: "
+                + ", ".join(str(x) for x in others)
+                + "  → export BEST_SEP_DIR=... 或 --best-sep 切换",
+                flush=True,
+            )
+        return chosen
+    lines = "\n".join(f"  {c}" for c in found) if found else "  （未发现现成目录）"
+    raise SystemExit(
+        f"找不到干净 KWS enroll 目录: {chosen}\n"
+        "main 只读 sep 产物，不跑 KWS BSS。请自行指定：\n"
+        "  export BEST_SEP_DIR=/path/to/best_sep\n"
+        "  python scripts/build_manifest.py --best-sep /path/to/best_sep\n"
+        "目录须含 index.jsonl 或 pos/*.wav。已发现:\n"
+        f"{lines}"
+    )
 
 
 def default_cohort_dir() -> Path:
@@ -188,10 +261,36 @@ def default_ecapa_dir() -> Path:
         if c.is_dir() and (c / "hyperparams.yaml").is_file():
             return c.resolve()
     return (default_model_dir() / "ecapa").resolve()
+
+
+def default_vblink_dir() -> Path:
+    """WeSpeaker VoxBlink2 SimAM-ResNet34 目录（avg_model.pt + config.yaml）。"""
     env = os.environ.get("VBLINK_DIR", "").strip()
     if env:
         return Path(env).expanduser().resolve()
+    for c in (
+        default_model_dir() / "vblink2_samresnet34",
+        Path("/root/autodl-tmp/ve_models/vblink2_samresnet34"),
+        Path("/root/autodl-tmp/models/vblink2_samresnet34"),
+    ):
+        if c.is_dir() and (c / "avg_model.pt").is_file():
+            return c.resolve()
     return (default_model_dir() / "vblink2_samresnet34").resolve()
+
+
+def normalize_presence_label(raw: object = None, *, split: object = None) -> str:
+    """统一成 present/absent。接受 present/pos/1 与 absent/neg/0；缺字段时用 split。"""
+    s = str(raw or "").strip().lower()
+    if s in ("present", "pos", "1", "true", "yes"):
+        return "present"
+    if s in ("absent", "neg", "0", "false", "no"):
+        return "absent"
+    sp = str(split or "").strip().lower()
+    if sp in ("pos", "present"):
+        return "present"
+    if sp in ("neg", "absent"):
+        return "absent"
+    raise KeyError(f"无法判定 present/absent: label={raw!r} split={split!r}")
 
 
 def default_spk_chs_dir() -> Path:
