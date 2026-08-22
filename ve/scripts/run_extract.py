@@ -282,7 +282,7 @@ def main() -> int:
     sep = try_create_onnx_separator(peak=0.95, device=args.device) if use_sep else None
     if use_sep and sep is None:
         raise SystemExit(
-            "sep_depth>=1 需要 MossFormer。请 ./download_moss_onnx.sh 并同步 VM/scripts"
+            "sep_depth>=1 需要 MossFormer。请 ./download_moss_onnx.sh（extract/scripts/mossformer2_onnx.py）"
         )
     if backend == "sep_route" and sep is None:
         raise SystemExit("PIPELINE=sep_route 需要 MossFormer")

@@ -173,7 +173,7 @@ if need_sep:
         check(
             "mossformer2_onnx import",
             False,
-            f"{e} → 同步 VM/scripts 或 export VM_SCRIPTS=...",
+            f"{e} → 确认 extract/scripts/mossformer2_onnx.py 或 ./download_moss_onnx.sh",
         )
 
 if need_tasnet:

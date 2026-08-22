@@ -4,7 +4,7 @@ VE 已嵌在 **extract** 仓的 `ve/`（不含 dataset / 模型 / 跑数）。
 数据与权重仍放 `/root/autodl-tmp/`。
 
 仓库：https://github.com/powerli2024/extract.git  
-AutoDL 克隆目录：`/root/extract`（VM 根命令不变；竞赛流水线在 `/root/extract/ve`）。
+AutoDL 克隆目录：`/root/extract`。竞赛流水线在 `/root/extract/ve`。KWS 分离在分支 **`sep`**。
 
 ## 一次配置
 
@@ -38,7 +38,7 @@ cd ve
 ```bash
 cd /root
 git clone https://github.com/powerli2024/extract.git extract
-cd /root/extract && chmod +x *.sh ve.sh ve/*.sh
+cd /root/extract && chmod +x ve.sh ve/*.sh
 ```
 
 MossFormer 封装在同仓 `../scripts/mossformer2_onnx.py`（extract 根 `scripts/`），不必再旁路挂载 `/root/media/VM`。

@@ -27,7 +27,7 @@ PIPELINE（提取后端）
 
   ps4         HF PS4 BSRNN（需 download_models.sh）
   wesep       WeSep bsrnn_ecapa（需 download_wesep.sh）
-  sep_route   MossFormer 分离 + 声纹选路（需 Moss ONNX + VM/scripts）
+  sep_route   MossFormer 分离 + 声纹选路（需 Moss ONNX + extract/scripts）
   mix         CMD 直通 ASR（当前端到端最强基线）
   cond_tasnet Cond-TasNet（需 COND_TASNET_CKPT + ECAPA；另开 VE_OUT）
 
@@ -283,7 +283,7 @@ echo "PYTHON_BIN=$PYTHON_BIN"
 case "$(echo "$PRESENCE_BACKEND" | tr '[:upper:]' '[:lower:]')" in
   eres2netv2|eres|eres2net|campplus|cam++|campplus_zh)
     if ! ensure_modelscope "$PYTHON_BIN"; then
-      echo "[ERR] Presence 需要 modelscope，且必须装进上面这个 PYTHON_BIN（不要另开 ve env）。"
+      echo "[ERR] Presence 需要 modelscope，且必须装进上面这个 PYTHON_BIN（conda env ve）。"
       exit 1
     fi
     ;;

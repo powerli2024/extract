@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# 选定 VE 用的解释器，并可选把 Presence 依赖装进同一个 bin。
-# 须先设 ROOT=ve 目录。source 本文件后导出 PYTHON_BIN。
-#
-# 优先级：已设 PYTHON_BIN → extract env.sh / .runtime → qwen3-asr → CONDA_PREFIX → python3
-# 不新建名为 ve 的 conda 环境（AutoDL 上 Qwen3 已在 qwen3-asr）。
+# 选定 VE 用的解释器。须先设 ROOT=ve 目录。source 后导出 PYTHON_BIN。
+# 优先级：已设 PYTHON_BIN → .env_ve / extract env.sh → conda ve → qwen3-asr（旧名回退）
 _ve_pick_python() {
   local c p
   if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -17,12 +14,20 @@ _ve_pick_python() {
       return 0
     fi
   fi
+  if [[ -n "${ROOT:-}" && -f "$ROOT/.env_ve" ]]; then
+    p="$(
+      set +u
+      # shellcheck disable=SC1091
+      source "$ROOT/.env_ve" >/dev/null 2>&1 || true
+      echo "${PYTHON_BIN:-}"
+    )"
+    [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
+  fi
   if [[ -n "${ROOT:-}" && -f "$ROOT/../.runtime/python_bin" ]]; then
     p="$(tr -d '\r\n' <"$ROOT/../.runtime/python_bin")"
     [[ -x "$p" ]] && { echo "$p"; return 0; }
   fi
   if [[ -n "${ROOT:-}" && -f "$ROOT/../env.sh" ]]; then
-    # shellcheck disable=SC1091
     p="$(
       set +u
       # shellcheck disable=SC1090
@@ -32,6 +37,10 @@ _ve_pick_python() {
     [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
   fi
   for c in \
+    /root/miniconda3/envs/ve/bin/python \
+    /root/miniconda3/envs/ve/bin/python3 \
+    /root/anaconda3/envs/ve/bin/python \
+    /root/autodl-tmp/envs/ve/bin/python \
     /root/miniconda3/envs/qwen3-asr/bin/python \
     /root/miniconda3/envs/qwen3-asr/bin/python3 \
     /root/anaconda3/envs/qwen3-asr/bin/python \
@@ -52,7 +61,6 @@ ensure_modelscope() {
     -i "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     --trusted-host "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
   )
-  # 仅有 modelscope 不够：speaker-verification pipeline 还要 audio extra / funasr
   local need=0
   "$py" -c "import modelscope" 2>/dev/null || need=1
   "$py" -c "from modelscope.pipelines import pipeline" 2>/dev/null || need=1

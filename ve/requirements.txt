@@ -9,5 +9,6 @@ funasr>=1.0
 kaldiio>=0.9
 huggingface_hub>=0.20
 addict>=2.4.0
-# Presence：ERes2NetV2 走 ModelScope audio pipeline，须装进 PYTHON_BIN（qwen3-asr）
-# MossFormer ORT GPU 库见 requirements_moss_ort.txt（download_moss_onnx.sh / setup_env 安装）
+qwen-asr>=0.0.6
+# Presence：ERes2NetV2 走 ModelScope audio pipeline，须装进 PYTHON_BIN（conda env ve）
+# MossFormer ORT GPU 库见 requirements_moss_ort.txt（不要 pip -U nvidia-*）

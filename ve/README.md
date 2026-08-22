@@ -1,6 +1,8 @@
 # VE：Presence-gated Target Speaker Extraction
 
-**当前提交默认不是 ps4。** 环境构建见 [`SETUP.md`](SETUP.md)，最优流水线见 [`CURRENT.md`](CURRENT.md)（Presence + **mix** ASR）。
+**当前提交默认是 Presence + mix ASR，不是 ps4。** 环境：conda `ve`（[`SETUP.md`](SETUP.md)）。最优流水线见 [`CURRENT.md`](CURRENT.md)。
+
+KWS 八阶段分离不在本分支：用 extract **`sep`** 写出 `best_sep`，本目录只读 enroll。
 
 **Verify-then-Extract**：声纹判断 CMD 是否存在该说话人；**仅「人不在」时拒识**；在场则按所选方案提取目标语音。
 

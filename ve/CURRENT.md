@@ -13,7 +13,7 @@
 已有 `ve_mix_novad` 时不要重跑 Presence / pos ASR：
 
 ```bash
-conda activate qwen3-asr
+conda activate ve
 cd /root/extract/ve
 VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 # → reports/submit/result.json   contest 应 ≈ 0.7389
@@ -22,7 +22,7 @@ VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 全新机器才走全量（仍不要 FORCE_CALIB）：
 
 ```bash
-conda activate qwen3-asr
+conda activate ve
 cd /root/extract/ve
 ENROLL_VAD=0 PIPELINE=mix \
 PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
@@ -35,7 +35,7 @@ LOCKED_THR=1 EXTRA_REJECT=1 \
 环境清单见 [`SETUP.md`](SETUP.md)。问题口径与已否决方向见 [`PROBLEM.md`](PROBLEM.md)。分阶命令见 [`EXPERIMENTS.md`](EXPERIMENTS.md)。
 
 ```bash
-conda activate qwen3-asr
+conda activate ve
 cd /root/extract/ve
 git pull --ff-only
 chmod +x *.sh
@@ -58,6 +58,8 @@ PIPELINE=mix ./check_env.sh
 
 - zh：`0.29305`
 - en：`0.357868`（按**唤醒词**语言，不是命令语言）
+
+KWS enroll 来自现成 `BEST_SEP_DIR`。要重做分离请用 extract 分支 **`sep`**，不要在 main 跑 s1–s8。
 
 ## 叠话加拒（只加拒、不救回）
 

@@ -512,11 +512,9 @@ def _ensure_moss_env() -> Path | None:
 
 
 def try_create_onnx_separator(peak: float = 0.7, device: str = "cuda:0"):
-    """创建 MossFormer 分离器：优先直接 ONNX，其次 VM sep_onnx / ClearVoice。"""
+    """创建 MossFormer ONNX 分离器（Presence USE_SEP / sep_route）。"""
     setup_sys_path()
     onnx_path = _ensure_moss_env()
-    errors: list[str] = []
-
     try:
         from mossformer2_onnx import MossFormer2Separator
 
@@ -528,42 +526,17 @@ def try_create_onnx_separator(peak: float = 0.7, device: str = "cuda:0"):
         )
         return sep
     except Exception as e:
-        errors.append(f"mossformer2_onnx:{e}")
-
-    try:
-        from sep_onnx import create_onnx_separator
-
-        sep = create_onnx_separator(peak=peak, device=device)
-        print("[INFO] MossFormer separator: ONNX (sep_onnx)", flush=True)
-        return sep
-    except Exception as e:
-        errors.append(f"onnx:{e}")
-
-    try:
-        from sep_cv import create_cv_separator
-
-        sep = create_cv_separator(peak=peak, device=device)
-        print("[INFO] MossFormer separator: ClearVoice (sep_cv)", flush=True)
-        return sep
-    except Exception as e:
-        errors.append(f"cv:{e}")
-
-    print(
-        "[WARN] MossFormer 不可用，Presence/sep_route 将仅用 mix。原因: "
-        + " | ".join(errors),
-        flush=True,
-    )
-    print(
-        "[HINT] AutoDL:\n"
-        "  1) 同步 VM/scripts\n"
-        "  2) ./download_moss_onnx.sh\n"
-        "  3) export MOSS_ONNX_PATH=.../simple_model.onnx\n"
-        "  4) pip install onnxruntime-gpu",
-        flush=True,
-    )
-    vm_hits = [p for p in sys.path if "VM" in p.replace("\\", "/")]
-    if vm_hits:
-        print(f"[HINT] VM on sys.path: {vm_hits[:3]}", flush=True)
-    else:
-        print("[HINT] sys.path 未含 VM/scripts", flush=True)
-    return None
+        print(
+            "[WARN] MossFormer 不可用，Presence/sep_route 将仅用 mix。"
+            f" 原因: mossformer2_onnx:{e}",
+            flush=True,
+        )
+        print(
+            "[HINT] AutoDL:\n"
+            "  1) 确认 /root/extract/scripts/mossformer2_onnx.py\n"
+            "  2) cd ve && ./download_moss_onnx.sh\n"
+            "  3) export MOSS_ONNX_PATH=/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx\n"
+            f"  4) {sys.executable} -m pip install -r requirements_moss_ort.txt",
+            flush=True,
+        )
+        return None

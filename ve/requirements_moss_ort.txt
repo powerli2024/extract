@@ -1,5 +1,5 @@
-# MossFormer ONNX + onnxruntime-gpu 运行期 CUDA 动态库（AutoDL 常用）
-# 由 download_moss_onnx.sh / setup_env.sh（INSTALL_MOSS_ORT=1）安装
+# MossFormer ONNX + onnxruntime-gpu（Presence USE_SEP / sep_route）
+# 不要 pip install -U nvidia-*（会把 CUDA 12.4 升到 12.6，和 torch 冲突）
 onnxruntime-gpu>=1.16.0
 nvidia-cublas-cu12
 nvidia-cufft-cu12

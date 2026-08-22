@@ -56,7 +56,7 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 | `SAMPLES` | `$VE_OUT/manifest/samples.jsonl` | 可手指定 |
 | `SEP_ROOT` | 自动找 `ve_gate_cmp/sep_streams` | 须含 `d1/` |
 | `DEVICE` | `cuda:0` | |
-| `PYTHON_BIN` | `qwen3-asr` 的 python | 与 ASR 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
+| `PYTHON_BIN` | conda env `ve` 的 python | 与 ASR / Presence 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
 
 ### 2.2 模型路径
 
@@ -107,10 +107,9 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 ## 3. 新建环境命令
 
 ```bash
-# --- 代码（extract.git，VE 在 ve/）---
 cd /root/extract
 git pull --ff-only
-chmod +x *.sh ve.sh ve/*.sh ve/VP/run_vp.sh
+chmod +x ve.sh ve/*.sh ve/VP/run_vp.sh
 cd /root/extract/ve
 cp -n .env_ve.example .env_ve
 source .env_ve
@@ -143,8 +142,8 @@ python -c "import mossformer2_onnx; print('moss ok')"
 
 ```bash
 cd /root/extract/ve && source .env_ve && conda activate ve
-FORCE_CALIB=1 HOLDOUT_FRAC=0.3 ENROLL_VAD=0 PIPELINE=mix LIMIT=32 SKIP_ASR=1 ./run_all.sh
-# 通过后再 LIMIT=0 且去掉 SKIP_ASR
+LOCKED_THR=1 EXTRA_REJECT=1 ENROLL_VAD=0 PIPELINE=mix LIMIT=32 SKIP_ASR=1 ./run_all.sh
+# 通过后再 LIMIT=0 且去掉 SKIP_ASR。禁止 FORCE_CALIB。
 ```
 
 拒识模块（不跑 ASR）：

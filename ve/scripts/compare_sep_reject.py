@@ -135,7 +135,7 @@ def main() -> int:
     need_sep = any(d >= 1 for d in depths)
     sep = try_create_onnx_separator(peak=0.95, device=args.device) if need_sep else None
     if need_sep and sep is None:
-        raise SystemExit("需要 MossFormer：./download_moss_onnx.sh + 同步 VM/scripts")
+        raise SystemExit("需要 MossFormer：./download_moss_onnx.sh + extract/scripts/mossformer2_onnx.py")
 
     # 归一化模式
     if args.asnorm or (

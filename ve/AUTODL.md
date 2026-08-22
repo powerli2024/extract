@@ -37,6 +37,7 @@
 ```bash
 cd /root/extract/ve
 chmod +x *.sh
+conda activate ve
 ./setup_env.sh && source .env_ve
 ./download_models.sh
 ./check_env.sh                         # 或 PIPELINE=wesep ./check_env.sh
