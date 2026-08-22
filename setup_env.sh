@@ -219,36 +219,33 @@ else
   echo "[ OK ] torch / torchaudio 已可用"
 fi
 
-# 1.5) 补齐 nvidia CUDA pip 库（ORT 找 libcublasLt.so.12）
-# 禁止 pip -U：torch 2.6+cu124 钉死 12.4.127，-U 会升到 12.6 导致版本冲突
-if [[ "$TORCH_TAG" != "cpu" ]]; then
-  echo "[INFO] 补齐 nvidia CUDA pip 库（不升级，避免盖掉 torch 钉死的 12.4.x）..."
-  vm_pip \
-    nvidia-cublas-cu12 \
-    nvidia-cufft-cu12 \
-    nvidia-cudnn-cu12 \
-    nvidia-cuda-runtime-cu12 \
-    nvidia-cuda-nvrtc-cu12 \
-    nvidia-nvjitlink-cu12 \
-    nvidia-curand-cu12 \
-    nvidia-cusolver-cu12 \
-    nvidia-cusparse-cu12 \
-    || echo "[WARN] nvidia-*-cu12 部分安装失败，请检查网络后重试"
+# 1.5+2) onnxruntime-gpu + nvidia CUDA pip 库（ORT 找 libcublasLt.so.12）
+# 禁止 pip -U nvidia-*：torch 2.6+cu124 钉死 12.4.127，-U 会升到 12.6
+ORT_REQ="$ROOT/requirements-ort.txt"
+echo "[INFO] pip: $ORT_REQ → $PYTHON_BIN"
+if [[ "$TORCH_TAG" == "cpu" ]]; then
+  echo "[WARN] CPU 机器：装 onnxruntime（无 GPU EP）"
+  vm_pip onnxruntime || "$PYTHON_BIN" -m pip install onnxruntime
+else
+  if "$PYTHON_BIN" -c "import onnxruntime as ort; print(ort.get_available_providers())" 2>/dev/null | grep -qi CUDA; then
+    echo "[ OK ] onnxruntime 已含 CUDAExecutionProvider"
+  else
+    "$PYTHON_BIN" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+    if [[ -f "$ORT_REQ" ]]; then
+      vm_pip -r "$ORT_REQ" || "$PYTHON_BIN" -m pip install -r "$ORT_REQ"
+    else
+      vm_pip onnxruntime-gpu || "$PYTHON_BIN" -m pip install onnxruntime-gpu
+    fi
+  fi
 fi
 
-# 2) onnxruntime-gpu（ONNX 分离）
-echo "[INFO] 安装 onnxruntime-gpu ..."
-if "$PYTHON_BIN" -c "import onnxruntime as ort; print(ort.get_available_providers())" 2>/dev/null | grep -qi CUDA; then
-  echo "[ OK ] onnxruntime 已含 CUDAExecutionProvider"
-else
-  # 先卸 CPU 包避免冲突
-  "$PYTHON_BIN" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
-  if ! vm_pip -U onnxruntime-gpu; then
-    echo "[WARN] 清华源 onnxruntime-gpu 失败，尝试官方 PyPI..."
-    "$PYTHON_BIN" -m pip install -U onnxruntime-gpu || \
-      vm_pip -U onnxruntime || \
-      echo "[ERR] onnxruntime 安装失败"
-  fi
+echo "[INFO] 硬检查: $PYTHON_BIN -c 'import onnxruntime'"
+if ! "$PYTHON_BIN" -c "import onnxruntime as ort; print('ort', getattr(ort,'__version__', '?'), ort.get_available_providers())"; then
+  echo "[ERR] $PYTHON_BIN 没有 onnxruntime。"
+  echo "  不要只 pip install -r requirements.txt（里面没有 ORT）。"
+  echo "  请: $PYTHON_BIN -m pip install -r $ORT_REQ"
+  echo "  或重新: ./setup_env.sh"
+  exit 1
 fi
 
 # 验证 ORT 在补齐 LD_LIBRARY_PATH 后能否真正用 CUDA
@@ -260,7 +257,7 @@ try:
     import torch
     site = Path(torch.__file__).resolve().parent.parent
     dirs=[]
-    for sub in ("nvidia/cublas/lib","nvidia/cuda_runtime/lib","nvidia/cudnn/lib","nvidia/nvjitlink/lib"):
+    for sub in ("nvidia/cublas/lib","nvidia/cuda_runtime/lib","nvidia/cudnn/lib","nvidia/nvjitlink/lib","nvidia/cufft/lib"):
         p=site/sub
         if p.is_dir(): dirs.append(str(p))
     if dirs:
@@ -415,6 +412,11 @@ try:
 except Exception:
     pass
 PY
+
+if ! "$PYTHON_BIN" -c "import onnxruntime" 2>/dev/null; then
+  echo "[ERR] setup 结束时 $PYTHON_BIN 仍无 onnxruntime，已中止。"
+  exit 1
+fi
 
 echo ""
 echo "setup 完成。PYTHON_BIN=$PYTHON_BIN  （VE 环境，conda 名 $ENV_NAME）"

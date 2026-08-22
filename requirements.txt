@@ -3,7 +3,8 @@
 # 也可: pip install -r requirements.txt
 #
 # 不在本文件的 GPU 栈（由 setup_env.sh 按 nvidia-smi 选 cu124/cu121）:
-#   torch, torchaudio, onnxruntime-gpu, nvidia-*-cu12
+#   torch, torchaudio, 以及 requirements-ort.txt（onnxruntime-gpu + nvidia-*-cu12）
+# 只 pip -r 本文件不会装 ORT。
 
 # --- 音频 / 数值 ---
 numpy>=1.24

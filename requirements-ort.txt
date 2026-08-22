@@ -1,0 +1,13 @@
+# ONNX 分离 GPU 栈。不要 pip install -U nvidia-*（会把 12.4 升到 12.6，和 torch 冲突）。
+# ./setup_env.sh 会装进 PYTHON_BIN；也可：
+#   python -m pip install -r requirements-ort.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+onnxruntime-gpu>=1.16.0
+nvidia-cublas-cu12
+nvidia-cufft-cu12
+nvidia-cudnn-cu12
+nvidia-cuda-runtime-cu12
+nvidia-cuda-nvrtc-cu12
+nvidia-nvjitlink-cu12
+nvidia-curand-cu12
+nvidia-cusolver-cu12
+nvidia-cusparse-cu12

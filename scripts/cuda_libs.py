@@ -129,24 +129,78 @@ def _prepend_ld_library_path(dirs: list[Path]) -> None:
     os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
 
 
+def _find_lib(dirs: list[Path], name: str) -> Path | None:
+    """精确 soname，否则 glob 版本后缀（libcublasLt.so.12.4.5.1）。"""
+    extras: tuple[str, ...] = ()
+    if name == "libcufft.so.11":
+        extras = ("libcufft.so.12",)
+    for d in dirs:
+        p = d / name
+        if p.is_file():
+            return p
+        for g in sorted(d.glob(name + "*")):
+            if g.is_file():
+                return g
+        for extra in extras:
+            p = d / extra
+            if p.is_file():
+                return p
+            for g in sorted(d.glob(extra + "*")):
+                if g.is_file():
+                    return g
+    return None
+
+
+def _soname_alias_dir(dirs: list[Path]) -> Path | None:
+    """ORT 常 dlopen libcufft.so.11；CUDA12 wheel 只有 libcufft.so.12* 时做同名软链。"""
+    root = Path(__file__).resolve().parents[1] / ".runtime" / "cuda_soname"
+    want = {
+        "libcufft.so.11": ("libcufft.so.11", "libcufft.so.12"),
+        "libcublasLt.so.12": ("libcublasLt.so.12",),
+    }
+    made = False
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    for soname, stems in want.items():
+        dest = root / soname
+        if dest.is_file() or dest.is_symlink():
+            made = True
+            continue
+        src = None
+        for stem in stems:
+            src = _find_lib(dirs, stem)
+            if src is not None:
+                break
+        if src is None:
+            continue
+        try:
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+            dest.symlink_to(src.resolve())
+            made = True
+        except OSError:
+            continue
+    return root if made else None
+
+
 def _preload(dirs: list[Path]) -> list[str]:
     loaded: list[str] = []
     seen: set[str] = set()
     for name in _PRELOAD_NAMES:
-        for d in dirs:
-            lib = d / name
-            if not lib.is_file():
-                continue
-            key = str(lib.resolve())
-            if key in seen:
-                continue
-            try:
-                ctypes.CDLL(key, mode=ctypes.RTLD_GLOBAL)
-                loaded.append(key)
-                seen.add(key)
-                break  # 每个 soname 成功一个即可
-            except OSError:
-                continue
+        lib = _find_lib(dirs, name)
+        if lib is None:
+            continue
+        key = str(lib.resolve())
+        if key in seen:
+            continue
+        try:
+            ctypes.CDLL(key, mode=ctypes.RTLD_GLOBAL)
+            loaded.append(key)
+            seen.add(key)
+        except OSError:
+            continue
     return loaded
 
 
@@ -155,13 +209,13 @@ def _missing_critical(dirs: list[Path]) -> list[str]:
     need = ("libcublasLt.so.12", "libcufft.so.11", "libcudnn.so.9")
     miss = []
     for name in need:
-        if not any((d / name).is_file() for d in dirs):
-            # cudnn.so.9 也可能叫 libcudnn.so.9.x — 放宽
-            if name.startswith("libcudnn") and any(
-                list(d.glob("libcudnn.so.9*")) for d in dirs
-            ):
-                continue
-            miss.append(name)
+        if _find_lib(dirs, name) is not None:
+            continue
+        if name.startswith("libcudnn") and any(
+            list(d.glob("libcudnn.so.9*")) for d in dirs
+        ):
+            continue
+        miss.append(name)
     return miss
 
 
@@ -169,6 +223,9 @@ def ensure_cuda_libs(*, verbose: bool = True) -> dict:
     """在首次 import onnxruntime 前调用。"""
     _fix_omp_threads()
     dirs = _candidate_lib_dirs()
+    alias = _soname_alias_dir(dirs)
+    if alias is not None:
+        dirs = [alias, *dirs]
     _prepend_ld_library_path(dirs)
     loaded = _preload(dirs)
     missing = _missing_critical(dirs)
@@ -190,9 +247,8 @@ def ensure_cuda_libs(*, verbose: bool = True) -> dict:
             print(
                 "[cuda_libs][WARN] 缺少: "
                 + ", ".join(missing)
-                + "\n  请在当前 env 执行:\n"
-                "  pip install -U nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12 "
-                "nvidia-cuda-runtime-cu12 nvidia-nvjitlink-cu12 nvidia-curand-cu12",
+                + "\n  请在当前 PYTHON（不要 pip -U nvidia-*）:\n"
+                f"  {sys.executable} -m pip install -r requirements-ort.txt",
                 flush=True,
             )
     return info
