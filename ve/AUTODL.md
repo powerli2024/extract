@@ -18,8 +18,9 @@
   ve_presence_best/reports/presence_calib_<backend>_<sep>_<ls>_<vad>_<norm>/
   cache/{huggingface,modelscope,torch,pip}/
 
-/root/extract/ve/                   # 本包代码
-/root/extract/scripts/           # MossFormer ONNX 封装（sep_route 必需）
+/root/extract/ve/                   # 本仓 main 代码
+/root/extract/scripts/              # MossFormer ONNX 封装（USE_SEP / sep_route）
+/root/extract-sep/                  # 另一克隆：KWS BSS（branch sep）
 ```
 
 ## 三种方案（均可在 AutoDL 跑通）

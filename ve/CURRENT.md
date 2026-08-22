@@ -37,7 +37,7 @@ LOCKED_THR=1 EXTRA_REJECT=1 \
 ```bash
 conda activate ve
 cd /root/extract/ve
-git pull --ff-only
+git -C /root/extract pull --ff-only
 chmod +x *.sh
 cp -n .env_ve.example .env_ve
 ./setup_env.sh && source .env_ve

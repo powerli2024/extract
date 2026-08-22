@@ -1,10 +1,8 @@
 # 本地 ↔ GitHub ↔ AutoDL 同步
 
 VE 已嵌在 **extract** 仓的 `ve/`（不含 dataset / 模型 / 跑数）。  
-数据与权重仍放 `/root/autodl-tmp/`。
-
-仓库：https://github.com/powerli2024/extract.git  
-AutoDL 克隆目录：`/root/extract`。竞赛流水线在 `/root/extract/ve`。KWS 分离在分支 **`sep`**。
+AutoDL：`/root/extract` = **main**；KWS 分离用旁边 `/root/extract-sep`（不要在本目录 `git checkout sep`）。  
+数据与权重只放 `/root/autodl-tmp/`（两仓 + conda env `ve` 共用）。
 
 ## 一次配置
 

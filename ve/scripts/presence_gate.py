@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from audio_io import cosine_sim, peak_normalize, save_audio, vad_crop_speech
-from paths import default_moss_onnx_path, setup_sys_path
+from paths import default_moss_onnx_path, extract_root, setup_sys_path
 from presence_encoder import PresenceEncoder
 
 setup_sys_path()
@@ -533,7 +533,7 @@ def try_create_onnx_separator(peak: float = 0.7, device: str = "cuda:0"):
         )
         print(
             "[HINT] AutoDL:\n"
-            "  1) 确认 /root/extract/scripts/mossformer2_onnx.py\n"
+            f"  1) 确认 {extract_root() / 'scripts' / 'mossformer2_onnx.py'}\n"
             "  2) cd ve && ./download_moss_onnx.sh\n"
             "  3) export MOSS_ONNX_PATH=/root/autodl-tmp/checkpoints/MossFormer2_ONNX/simple_model.onnx\n"
             f"  4) {sys.executable} -m pip install -r requirements_moss_ort.txt",

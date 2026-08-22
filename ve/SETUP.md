@@ -7,13 +7,15 @@
 ## 1. 目录布局（必有 vs 跑出来的）
 
 ```text
-/root/extract/ve/                          # 代码（git）
-/root/extract/scripts/mossformer2_onnx.py   # USE_SEP=1 / sep_route / VP matrix 需要
-# VD/tools 可选（ResNet 回退已拷进 VE/scripts）
+/root/extract/                             # git clone main（本仓）
+/root/extract/ve/
+/root/extract/scripts/mossformer2_onnx.py  # USE_SEP=1 / sep_route
+/root/extract-sep/                         # 另一克隆，branch sep；勿在本仓 checkout sep
 
-/root/autodl-tmp/
+/root/autodl-tmp/                          # 两仓共享
   datasetA/                              # CMD：pos/neg + jsonl   【必拷】
-  pos_neg/best_sep/{pos,neg}/*.wav       # enroll                 【必拷】
+  pos_neg/best_sep/{pos,neg}/*.wav       # enroll                 【必拷或链到 kws_sep/best_sep】
+  kws_sep/                               # extract-sep 的 VM_OUT
   ve_models/
     eres2netv2_zh/                       # Presence 默认
     campplus_zh/                         # VP 对照
