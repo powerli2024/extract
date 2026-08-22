@@ -16,7 +16,7 @@ export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-$OMP_NUM_THREADS}"
 
 STAGE="${1:-}"
 [[ -n "$STAGE" ]] || {
-  echo "用法: $0 collect|s1..s8|compare|eval|analyze [--force] [--retry-failed] [args...]" >&2
+  echo "用法: $0 collect|s1..s8|compare|eval|analyze|handoff [--force] [--retry-failed] [args...]" >&2
   exit 1
 }
 shift || true
@@ -91,15 +91,26 @@ pick_python() {
   return 1
 }
 
-if ! PYTHON_BIN="$(pick_python)"; then
-  echo "[ERR] 当前没有可用的 Python 含 qwen_asr。请 ./setup_env.sh && source ./env.sh" >&2
-  exit 1
-fi
-echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
-"$PYTHON_BIN" -c "import qwen_asr, torch; print('[INFO] qwen_asr OK; torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+if [[ "$STAGE" == "handoff" ]]; then
+  if [[ -z "${PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$(command -v python3 || command -v python || true)"
+  fi
+  if [[ -z "$PYTHON_BIN" ]]; then
+    echo "[ERR] handoff 需要 python3" >&2
+    exit 1
+  fi
+  echo "[INFO] PYTHON_BIN=$PYTHON_BIN  (handoff：不需要 qwen_asr)"
+  export PYTHONPATH="${SCRIPTS}:${PYTHONPATH:-}"
+else
+  if ! PYTHON_BIN="$(pick_python)"; then
+    echo "[ERR] 当前没有可用的 Python 含 qwen_asr。请 ./setup_env.sh && source ./env.sh" >&2
+    exit 1
+  fi
+  echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
+  "$PYTHON_BIN" -c "import qwen_asr, torch; print('[INFO] qwen_asr OK; torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
-export PYTHONPATH="${SCRIPTS}:${PYTHONPATH:-}"
-eval "$("$PYTHON_BIN" - <<'PY'
+  export PYTHONPATH="${SCRIPTS}:${PYTHONPATH:-}"
+  eval "$("$PYTHON_BIN" - <<'PY'
 from pathlib import Path
 import os
 dirs = []
@@ -135,6 +146,7 @@ else:
     print('echo "[WARN] 未找到 nvidia/cublas 等 CUDA lib；ORT 可能掉 CPU"')
 PY
 )"
+fi
 
 if [[ "${VM_ALLOW_DOWNLOAD:-0}" != "1" ]]; then
   export HF_HUB_OFFLINE=1
@@ -143,9 +155,11 @@ if [[ "${VM_ALLOW_DOWNLOAD:-0}" != "1" ]]; then
   export VM_ALLOW_DOWNLOAD=0
 fi
 
-for f in utils_audio.py asr_backend.py mossformer2_ss.py mossformer2_onnx.py; do
-  [[ -f "$SCRIPTS/$f" ]] || { echo "[ERR] 缺少整合模块 $SCRIPTS/$f" >&2; exit 1; }
-done
+if [[ "$STAGE" != "handoff" ]]; then
+  for f in utils_audio.py asr_backend.py mossformer2_ss.py mossformer2_onnx.py; do
+    [[ -f "$SCRIPTS/$f" ]] || { echo "[ERR] 缺少整合模块 $SCRIPTS/$f" >&2; exit 1; }
+  done
+fi
 
 LIMIT=0
 THR=""
@@ -252,6 +266,10 @@ case "$STAGE" in
     ;;
   analyze|analysis)
     "$PYTHON_BIN" "$SCRIPTS/analyze_results.py" --vm-out "$VM_OUT" --splits "$SPLITS"
+    ;;
+  handoff)
+    "$PYTHON_BIN" "$SCRIPTS/export_kws_handoff.py" --vm-out "$VM_OUT" --splits "$SPLITS" \
+      ${EXTRA[@]+"${EXTRA[@]}"}
     ;;
   *)
     echo "[ERR] unknown stage $STAGE" >&2

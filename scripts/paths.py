@@ -59,6 +59,8 @@ def default_vm_out() -> Path:
     if env:
         return Path(env).expanduser().resolve()
     if Path("/root/autodl-tmp").is_dir():
+        if (vm_root() / ".sep-only").is_file():
+            return Path("/root/autodl-tmp/kws_sep").resolve()
         return Path("/root/autodl-tmp/vm").resolve()
     return (media_root() / "vm_out").resolve()
 

@@ -17,7 +17,11 @@ if [[ -f "${VM_ROOT}/.runtime/autodl_tmp_paths.sh" ]]; then
 fi
 
 if [[ -d /root/autodl-tmp ]]; then
-  export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
+  if [[ -f "${VM_ROOT}/.sep-only" ]]; then
+    export VM_OUT="${VM_OUT:-/root/autodl-tmp/kws_sep}"
+  else
+    export VM_OUT="${VM_OUT:-/root/autodl-tmp/vm}"
+  fi
   export DATA_DIR="${DATA_DIR:-}"
   if [[ -z "${DATA_DIR}" ]]; then
     if [[ -f /root/autodl-tmp/datasetA/pos.jsonl || -d /root/autodl-tmp/datasetA ]]; then

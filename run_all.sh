@@ -6,9 +6,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
 
-STAGES_DEFAULT="collect,s1,s2,s3,s4,s5,s6,s7,s8,compare,eval,analyze"
+if [[ -f "$ROOT/.sep-only" ]]; then
+  STAGES_DEFAULT="collect,s1,s2,s3,s4,s5,s6,s7,s8,compare,eval,handoff"
+  PACK="${PACK:-0}"
+else
+  STAGES_DEFAULT="collect,s1,s2,s3,s4,s5,s6,s7,s8,compare,eval,analyze"
+  PACK="${PACK:-1}"
+fi
 STAGES="$STAGES_DEFAULT"
-PACK="${PACK:-1}"
 SPLITS="${SPLITS:-pos,neg}"
 EXTRA=()
 while [[ $# -gt 0 ]]; do
