@@ -5,6 +5,7 @@ if [[ -z "${VM_ROOT:-}" ]]; then
   VM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 export VM_ROOT
+export VM_CONDA_ENV="${VM_CONDA_ENV:-ve}"
 
 # 迁移脚本写出的路径优先
 if [[ -f /root/autodl-tmp/env_paths.sh ]]; then

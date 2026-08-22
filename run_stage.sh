@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$ROOT/scripts"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 
 # 尽早修 OMP，避免任何 python 启动前 libgomp 报警
 if [[ -z "${OMP_NUM_THREADS:-}" || ! "${OMP_NUM_THREADS}" =~ ^[0-9]+$ || "${OMP_NUM_THREADS}" -le 0 ]]; then
@@ -21,29 +23,11 @@ STAGE="${1:-}"
 }
 shift || true
 
-if [[ -f "${VB_DIR:-/root/VB}/.env_clearvoice" ]]; then
-  # shellcheck disable=SC1090
-  source "${VB_DIR:-/root/VB}/.env_clearvoice" || true
+# ClearVoice 必须与 VE 同一解释器，禁止独立 ClearerVoice-Studio
+if [[ -n "${CLEARVOICE_PYTHON:-}" && -n "${PYTHON_BIN:-}" && "$CLEARVOICE_PYTHON" != "$PYTHON_BIN" ]]; then
+  echo "[WARN] 忽略非 VE 的 CLEARVOICE_PYTHON=$CLEARVOICE_PYTHON"
 fi
-export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/ClearerVoice-Studio}"
-
-# 无效 CLEARVOICE_PYTHON 会阻断 ClearVoice：仅保留真实存在的路径
-if [[ -n "${CLEARVOICE_PYTHON:-}" && ! -x "${CLEARVOICE_PYTHON}" ]]; then
-  echo "[WARN] CLEARVOICE_PYTHON 无效，已清除: $CLEARVOICE_PYTHON"
-  unset CLEARVOICE_PYTHON
-fi
-if [[ -z "${CLEARVOICE_PYTHON:-}" ]]; then
-  for c in \
-    /root/miniconda3/envs/ClearerVoice-Studio/bin/python \
-    /root/miniconda3/envs/clearvoice/bin/python \
-    /root/miniconda3/envs/ClearVoice/bin/python
-  do
-    if [[ -x "$c" ]]; then
-      export CLEARVOICE_PYTHON="$c"
-      break
-    fi
-  done
-fi
+export CLEARVOICE_PYTHON="${PYTHON_BIN:-}"
 
 # ONNX 吞吐：4090 默认更多 session + 批分离
 export MOSS_NUM_SESSIONS="${MOSS_NUM_SESSIONS:-6}"
@@ -70,16 +54,11 @@ python_has_qwen_asr() {
 }
 
 pick_python() {
-  local cands=()
+  local cands=() p
   [[ -n "${PYTHON_BIN:-}" ]] && cands+=("$PYTHON_BIN")
-  [[ -f "$ROOT/.runtime/python_bin" ]] && cands+=("$(tr -d '[:space:]' <"$ROOT/.runtime/python_bin")")
-  cands+=(
-    "/root/miniconda3/envs/${VM_CONDA_ENV:-qwen3-asr}/bin/python"
-    /root/miniconda3/envs/qwen3-asr/bin/python
-    /root/autodl-tmp/envs/qwen3-asr/bin/python
-    "$(command -v python3 || true)"
-    "$(command -v python || true)"
-  )
+  if p="$(extract_pick_python 2>/dev/null)"; then
+    cands+=("$p")
+  fi
   local c
   for c in "${cands[@]}"; do
     [[ -n "$c" && -x "$c" ]] || continue
@@ -107,6 +86,7 @@ else
     exit 1
   fi
   echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
+  export CLEARVOICE_PYTHON="$PYTHON_BIN"
   "$PYTHON_BIN" -c "import qwen_asr, torch; print('[INFO] qwen_asr OK; torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
   export PYTHONPATH="${SCRIPTS}:${PYTHONPATH:-}"
@@ -196,7 +176,7 @@ echo "============================================"
 echo " VM stage=$STAGE  VM_OUT=$VM_OUT"
 echo " SPLITS=$SPLITS  LIMIT=$LIMIT  FORCE=$FORCE SKIP_DONE=${VM_SKIP_DONE}"
 echo " ONNX: MOSS_NUM_SESSIONS=$MOSS_NUM_SESSIONS VM_SEP_BATCH=$VM_SEP_BATCH"
-echo " CLEARVOICE_PYTHON=${CLEARVOICE_PYTHON:-<unset, will probe>}"
+echo " CLEARVOICE_PYTHON=$CLEARVOICE_PYTHON  (VE 同一解释器)"
 echo " offline: HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}"
 echo "============================================"
 

@@ -49,21 +49,23 @@ def _probe(py: str) -> tuple[bool, str]:
 
 
 def _resolve_clearvoice_python() -> str | None:
-    """找到能同时 import clearvoice 与 torch 的解释器。"""
+    """只用 VE 解释器（CLEARVOICE_PYTHON == PYTHON_BIN）。不探测独立 ClearerVoice-Studio。"""
+    env_name = os.environ.get("VM_CONDA_ENV", "ve").strip() or "ve"
     cands: list[str] = []
-    env = os.environ.get("CLEARVOICE_PYTHON", "").strip()
-    if env:
-        cands.append(env)
+    for key in ("CLEARVOICE_PYTHON", "PYTHON_BIN"):
+        v = os.environ.get(key, "").strip()
+        if v:
+            cands.append(v)
     cands.append(sys.executable)
     cands += [
+        f"/root/miniconda3/envs/{env_name}/bin/python",
+        f"/root/anaconda3/envs/{env_name}/bin/python",
+        "/root/miniconda3/envs/ve/bin/python",
+        "/root/anaconda3/envs/ve/bin/python",
+        "/root/autodl-tmp/envs/ve/bin/python",
+        # 历史 VE 名，仅回退
         "/root/miniconda3/envs/qwen3-asr/bin/python",
         "/root/autodl-tmp/envs/qwen3-asr/bin/python",
-        "/root/miniconda3/envs/ClearerVoice-Studio/bin/python",
-        "/root/autodl-tmp/envs/ClearerVoice-Studio/bin/python",
-        "/root/miniconda3/envs/ClearerVoice-Studio/bin/python3",
-        "/root/miniconda3/envs/clearvoice/bin/python",
-        "/root/autodl-tmp/envs/clearvoice/bin/python",
-        "/root/miniconda3/envs/ClearVoice/bin/python",
     ]
     seen: set[str] = set()
     for c in cands:
@@ -89,13 +91,10 @@ def create_cv_separator(peak: float = 0.7, device: str = "cuda:0"):
     else:
         os.environ.pop("CLEARVOICE_PYTHON", None)
         print(
-            "[WARN] 未找到同时具备 clearvoice+torch 的 Python。\n"
-            "  在同一环境里必须两者都有，例如:\n"
-            "    conda activate qwen3-asr && pip install clearvoice\n"
-            "    # 或\n"
-            "    conda activate ClearerVoice-Studio && pip install clearvoice torch torchaudio\n"
-            "    export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python\n"
-            "将尝试当前环境 in-process …",
+            "[WARN] VE python 不能同时 import clearvoice+torch。\n"
+            "  conda activate ve && pip install -r requirements-optional.txt\n"
+            "  或: ./setup_env.sh && source ./env.sh\n"
+            "将尝试当前解释器 in-process …",
             flush=True,
         )
 
@@ -109,8 +108,8 @@ def create_cv_separator(peak: float = 0.7, device: str = "cuda:0"):
     if "failed" in (msg or "").lower():
         raise RuntimeError(
             f"ClearVoice 不可用: {msg}\n"
-            "同一 Python 需要: import clearvoice 且 import torch\n"
-            "  conda activate qwen3-asr && pip install clearvoice\n"
-            "  export CLEARVOICE_PYTHON=$CONDA_PREFIX/bin/python"
+            "同一 VE python 需要: import clearvoice 且 import torch\n"
+            "  conda activate ve && pip install -r requirements-optional.txt\n"
+            "  或: ./setup_env.sh"
         )
     return sep

@@ -5,6 +5,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
+if [[ -f "$ROOT/ve/.env_ve" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/ve/.env_ve" || true
+fi
+if [[ -f "$ROOT/env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/env.sh" || true
+fi
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
 export VM_OUT="${VM_OUT:-/root/autodl-tmp/kws_sep}"
 STAGES="${STAGES:-collect,s1,s2,s3,s4,s5,s6,s7,s8,compare,eval,handoff}"
 echo "[INFO] extract@sep  VM_OUT=$VM_OUT  STAGES=$STAGES"

@@ -2,8 +2,8 @@
 # 选定 VE 用的解释器，并可选把 Presence 依赖装进同一个 bin。
 # 须先设 ROOT=ve 目录。source 本文件后导出 PYTHON_BIN。
 #
-# 优先级：已设 PYTHON_BIN → extract env.sh / .runtime → qwen3-asr → CONDA_PREFIX → python3
-# 不新建名为 ve 的 conda 环境（AutoDL 上 Qwen3 已在 qwen3-asr）。
+# 优先级：已设 PYTHON_BIN → extract env.sh / .runtime → conda ve → qwen3-asr（旧名回退） → python3
+# 不新建第二套环境；ClearVoice 与 ASR 都进 PYTHON_BIN。
 _ve_pick_python() {
   local c p
   if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -32,6 +32,9 @@ _ve_pick_python() {
     [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
   fi
   for c in \
+    /root/miniconda3/envs/ve/bin/python \
+    /root/miniconda3/envs/ve/bin/python3 \
+    /root/anaconda3/envs/ve/bin/python \
     /root/miniconda3/envs/qwen3-asr/bin/python \
     /root/miniconda3/envs/qwen3-asr/bin/python3 \
     /root/anaconda3/envs/qwen3-asr/bin/python \

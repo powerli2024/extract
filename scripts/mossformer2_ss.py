@@ -6,8 +6,8 @@ MossFormer2_SS_16K 语音分离封装（ClearerVoice / clearvoice）。
 （旧实现每条样本重启进程+重载模型，GPU 利用率会接近 0 且极慢。）
 
 环境变量:
-  CLEARVOICE_ROOT     — ClearerVoice-Studio 仓库根（可选）
-  CLEARVOICE_PYTHON   — 已 pip install clearvoice 的 conda python
+  CLEARVOICE_PYTHON   — 必须与 PYTHON_BIN 同一 VE 解释器（已 pip install clearvoice）
+  CLEARVOICE_ROOT     — 可选，仅当用源码树而不是 pip 包时
   MOSS_CKPT_DIR       — 含 MossFormer2_SS_16K/ 的 checkpoints 目录
                         （默认优先 <VB上级>/checkpoints，勿放 VB/ 内）
 """

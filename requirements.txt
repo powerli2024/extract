@@ -1,5 +1,5 @@
-# VM 主环境（conda env: qwen3-asr, Python 3.12）
-# 安装入口: ./setup_env.sh （会装 CUDA 版 torch + 本文件）
+# VM 主环境（conda env: ve，与 Presence VE 同一解释器）
+# 安装入口: ./setup_env.sh （会装 CUDA 版 torch + 本文件 + clearvoice）
 # 也可: pip install -r requirements.txt
 #
 # 不在本文件的 GPU 栈（由 setup_env.sh 按 nvidia-smi 选 cu124/cu121）:

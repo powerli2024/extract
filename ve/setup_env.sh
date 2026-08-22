@@ -38,7 +38,7 @@ if [[ -f /etc/network_turbo ]]; then
   source /etc/network_turbo || true
 fi
 
-# 与 extract 根共用 qwen3-asr；不要默认再 conda create ve
+# 与 extract 根共用 conda env ve（ve/.env_ve 的 PYTHON_BIN）；不要另开 qwen3-asr
 # shellcheck disable=SC1091
 source "$ROOT/pick_python.sh"
 echo "[INFO] Python=$PYTHON_BIN"
@@ -47,7 +47,7 @@ echo "[INFO] Python=$PYTHON_BIN"
 # pip 不用代理
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY || true
 
-# torch：qwen3-asr 里通常已有，默认不重装（避免拆 ASR）
+# torch：ve 里通常已有，默认不重装（避免拆 ASR）
 if [[ "${SKIP_TORCH:-}" != "1" ]] && ! "$PYTHON_BIN" -c "import torch" 2>/dev/null; then
   TORCH_CUDA="${TORCH_CUDA:-}"
   if [[ -z "$TORCH_CUDA" ]] && command -v nvidia-smi >/dev/null 2>&1; then
@@ -82,7 +82,7 @@ if [[ "${INSTALL_WESPEAKER:-0}" == "1" ]]; then
     echo "[WARN] wespeaker 安装失败"
 fi
 
-# MossFormer ORT：qwen3-asr 常已有；没有才装
+# MossFormer ORT：ve 常已有；没有才装
 if [[ "${SKIP_MOSS_ORT:-}" != "1" ]] && "$PYTHON_BIN" -c "import onnxruntime" 2>/dev/null; then
   echo "[INFO] 复用已有 onnxruntime"
   SKIP_MOSS_ORT=1
@@ -136,7 +136,7 @@ EOF
 echo "[OK] wrote $ROOT/.env_ve"
 echo "source $ROOT/.env_ve"
 echo "下一步:"
-echo "  conda activate qwen3-asr   # 若尚未激活；须与 PYTHON_BIN 同一环境"
+echo "  conda activate ve"
 echo "  source $ROOT/.env_ve"
 echo "  ONLY=eres2netv2 ./download_presence_encoders.sh"
 echo "  ./download_moss_onnx.sh"

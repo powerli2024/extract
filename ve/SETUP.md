@@ -56,7 +56,7 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 | `SAMPLES` | `$VE_OUT/manifest/samples.jsonl` | 可手指定 |
 | `SEP_ROOT` | 自动找 `ve_gate_cmp/sep_streams` | 须含 `d1/` |
 | `DEVICE` | `cuda:0` | |
-| `PYTHON_BIN` | `qwen3-asr` 的 python | 与 ASR 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
+| `PYTHON_BIN` | conda env `ve` 的 python | 与 ASR / ClearVoice 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
 
 ### 2.2 模型路径
 

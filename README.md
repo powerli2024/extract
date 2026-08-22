@@ -20,15 +20,19 @@ datasetA kws
 
 ## AutoDL
 
+分离与 Presence **共用 conda 环境 `ve`**（`ve/.env_ve` 的 `PYTHON_BIN`）。不要再建 `qwen3-asr` 或 `ClearerVoice-Studio`。
+
 ```bash
 cd /root
 git clone -b sep https://github.com/powerli2024/extract.git extract
-cd /root/extract && chmod +x *.sh run_sep.sh
+cd /root/extract && chmod +x *.sh run_sep.sh pick_python.sh
 export DATA_DIR=/root/autodl-tmp/datasetA
 export VM_OUT=/root/autodl-tmp/kws_sep
 export MOSS_CKPT_DIR=/root/autodl-tmp/checkpoints
 export ASR_MODEL_DIR=/root/autodl-tmp/Qwen3-ASR-1.7B
-./setup_env.sh && source ./env.sh
+# 已有 VE：先 source ve/.env_ve；否则 ./setup_env.sh 会 conda create -n ve
+./setup_env.sh
+source ./env.sh                 # 或: conda activate ve && source ve/.env_ve
 ./download_models.sh
 ./check_env.sh
 ./run_sep.sh --limit 20
@@ -48,13 +52,13 @@ python scripts/analyze_dual_zero.py --pos-neg /root/autodl-tmp/kws_sep
 
 ## 环境与权重
 
-与 `main` 相同：数据、ONNX/ClearVoice、Qwen3 只放 `/root/autodl-tmp`。  
-`./setup_env.sh` → `./download_models.sh` → `./check_env.sh`。
+与 Presence VE **同一套 Python**：数据、ONNX/ClearVoice 权重、Qwen3 只放 `/root/autodl-tmp`。  
+`./setup_env.sh` 把 torch / ORT / qwen-asr / **clearvoice** 都装进 `ve`。
 
 | 阶段 | 含义 |
 |------|------|
 | s1 | ONNX 一阶 original/spk1/spk2 |
-| s2 | ClearVoice 一阶 |
+| s2 | ClearVoice 一阶（同一 VE python） |
 | s3 | ONNX cascade（输入同 split s1 wav） |
 | s4 | ClearVoice cascade（输入 s2） |
 | s5–s8 | 门控二次（抢救，不是默认 enroll） |

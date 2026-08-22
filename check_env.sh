@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
 
 HARD=0
 WARN=0
@@ -13,53 +15,28 @@ warn() { echo "[WARN] $*"; WARN=$((WARN + 1)); }
 err() { echo "[ERR ] $*"; HARD=$((HARD + 1)); }
 
 echo "============================================"
-echo " VM check_env (read-only)"
+echo " VM check_env (read-only)  VE python"
 echo " ROOT=$ROOT"
 echo "============================================"
-
-if [[ -f "${VB_DIR:-/root/VB}/.env_clearvoice" ]]; then
-  # shellcheck disable=SC1090
-  source "${VB_DIR:-/root/VB}/.env_clearvoice" || true
-fi
-
-export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/ClearerVoice-Studio}"
-if [[ -n "${CLEARVOICE_PYTHON:-}" && ! -x "${CLEARVOICE_PYTHON}" ]]; then
-  unset CLEARVOICE_PYTHON
-fi
-if [[ -z "${CLEARVOICE_PYTHON:-}" ]]; then
-  for c in \
-    /root/miniconda3/envs/ClearerVoice-Studio/bin/python \
-    /root/miniconda3/envs/clearvoice/bin/python \
-    /root/miniconda3/envs/ClearVoice/bin/python
-  do
-    if [[ -x "$c" ]]; then export CLEARVOICE_PYTHON="$c"; break; fi
-  done
-fi
 
 if [[ -f "$ROOT/.runtime/env.sh" ]]; then
   # shellcheck disable=SC1091
   source "$ROOT/.runtime/env.sh" || true
 fi
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-  PYTHON_BIN=""
-  for c in \
-    /root/miniconda3/envs/qwen3-asr/bin/python \
-    "$(command -v python3 || true)" \
-    "$(command -v python || true)"
-  do
-    [[ -n "$c" && -x "$c" ]] && PYTHON_BIN="$c" && break
-  done
-fi
+PYTHON_BIN="$(extract_pick_python)"
+export PYTHON_BIN
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-echo "--- Python / 包 ---"
+echo "--- Python / 包（须为 VE 解释器）---"
 if [[ -x "$PYTHON_BIN" ]] || command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   ok "PYTHON_BIN=$PYTHON_BIN"
-  if [[ "$PYTHON_BIN" == */envs/qwen3-asr/* ]] || [[ "$PYTHON_BIN" == */envs/"${VM_CONDA_ENV:-qwen3-asr}"/* ]]; then
-    ok "使用专用 conda env"
+  if [[ "$PYTHON_BIN" == */envs/ve/* ]] || [[ "$PYTHON_BIN" == */envs/"${VM_CONDA_ENV:-ve}"/* ]]; then
+    ok "conda env=ve"
+  elif [[ -f "$ROOT/ve/.env_ve" ]]; then
+    ok "来自 ve/.env_ve（与 Presence VE 同一解释器）"
   else
-    warn "未使用 qwen3-asr env（当前 $PYTHON_BIN）。建议重跑: ./setup_env.sh"
+    warn "未检测到 conda env ve。建议: VM_CONDA_ENV=ve ./setup_env.sh"
   fi
   "$PYTHON_BIN" - <<'PY' || err "主 Python 缺包 — 请重新 ./setup_env.sh"
 import importlib
@@ -94,6 +71,11 @@ print(f"  ort providers={prov}")
 if has_gpu and "CUDAExecutionProvider" not in prov:
     raise SystemExit("GPU 机器缺少 CUDAExecutionProvider，请重装 onnxruntime-gpu")
 PY
+  if "$PYTHON_BIN" -c "import clearvoice" >/dev/null 2>&1; then
+    ok "clearvoice 已在 VE python（s2/s4/s5/s7/s8）"
+  else
+    warn "VE python 不能 import clearvoice；s2+ 需要: $PYTHON_BIN -m pip install -r requirements-optional.txt"
+  fi
 else
   err "找不到 PYTHON_BIN"
 fi
@@ -149,12 +131,10 @@ do
 done
 [[ -n "$cv_found" ]] && ok "ClearVoice ckpt=$cv_found" || warn "未找到 ClearVoice SS ckpt（s2/s4/s5/s8 需要）"
 
-if [[ -x "$CLEARVOICE_PYTHON" ]]; then
-  ok "CLEARVOICE_PYTHON=$CLEARVOICE_PYTHON"
-else
-  warn "CLEARVOICE_PYTHON 不可执行: $CLEARVOICE_PYTHON"
+ok "CLEARVOICE_PYTHON=$CLEARVOICE_PYTHON （须与 PYTHON_BIN 同一 VE 环境）"
+if [[ -n "$CLEARVOICE_PYTHON" && "$CLEARVOICE_PYTHON" != "$PYTHON_BIN" ]]; then
+  warn "CLEARVOICE_PYTHON 与 PYTHON_BIN 不同；sep 分支应只用 VE python"
 fi
-[[ -d "$CLEARVOICE_ROOT" ]] && ok "CLEARVOICE_ROOT=$CLEARVOICE_ROOT" || warn "CLEARVOICE_ROOT 不存在: $CLEARVOICE_ROOT"
 
 if [[ -d "$ASR_MODEL_DIR" ]]; then
   ok "ASR_MODEL_DIR=$ASR_MODEL_DIR"
@@ -183,5 +163,5 @@ if [[ "$WARN" -gt 0 ]]; then
   echo "结论: 可跑部分阶段，但有警告；缺权重请 ./download_models.sh"
   exit 2
 fi
-echo "结论: 检查通过，可 ./run_all.sh"
+echo "结论: 检查通过，可 ./run_sep.sh"
 exit 0

@@ -1,38 +1,28 @@
 #!/usr/bin/env bash
-# 安装/搭建环境（会 conda create + pip）。检查请用 ./check_env.sh
-# 默认创建独立环境 qwen3-asr，并安装:
-#   torch / torchaudio / onnxruntime-gpu / qwen-asr / 轻量依赖
+# 安装/搭建环境（conda create + pip）。检查请用 ./check_env.sh
+# extract@sep：全部装进 VE 环境（默认 conda 名 ve），含 torch / ORT / qwen-asr / clearvoice。
+# 不新建 qwen3-asr，也不用独立 ClearerVoice-Studio。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
+EXTRACT_PICK_DEFER=1
+# shellcheck disable=SC1091
+source "$ROOT/pick_python.sh"
+if [[ -f "$ROOT/ve/.env_ve" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/ve/.env_ve" || true
+fi
 
 echo "============================================"
-echo " VM setup_env (install)"
+echo " VM setup_env (install into VE)"
 echo " ROOT=$ROOT"
 echo "============================================"
 
-if [[ -f "${CLEARVOICE_ENV_FILE:-}" ]]; then
-  # shellcheck disable=SC1090
-  source "$CLEARVOICE_ENV_FILE" || true
-elif [[ -f /root/VB/.env_clearvoice ]]; then
-  # shellcheck disable=SC1091
-  source /root/VB/.env_clearvoice || true
-fi
-
-export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/ClearerVoice-Studio}"
-# 仅当文件存在时才预设；否则留给运行时探测 / in-process
-if [[ -z "${CLEARVOICE_PYTHON:-}" ]]; then
-  for c in \
-    /root/miniconda3/envs/ClearerVoice-Studio/bin/python \
-    /root/miniconda3/envs/clearvoice/bin/python
-  do
-    if [[ -x "$c" ]]; then export CLEARVOICE_PYTHON="$c"; break; fi
-  done
-fi
+export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-}"
 mkdir -p "${HF_HOME:-/tmp}" "${TORCH_HOME:-/tmp}" "${PIP_CACHE_DIR:-/tmp}" 2>/dev/null || true
 
-ENV_NAME="${VM_CONDA_ENV:-qwen3-asr}"
+ENV_NAME="${VM_CONDA_ENV:-ve}"
 PY_VER="${VM_PYTHON_VERSION:-3.12}"
 # CUDA wheel 标签：可 export TORCH_CUDA=cu124 / cu121 / cpu
 TORCH_CUDA="${TORCH_CUDA:-}"
@@ -306,6 +296,20 @@ else
     || "$PYTHON_BIN" -m pip install -U "qwen-asr"
 fi
 
+# 5) ClearVoice 装进同一 VE python（s2/s4/s5/s7/s8）
+OPT_REQ="$ROOT/requirements-optional.txt"
+echo "[INFO] pip: $OPT_REQ (clearvoice → VE) ..."
+if [[ -f "$OPT_REQ" ]]; then
+  vm_pip -r "$OPT_REQ" || "$PYTHON_BIN" -m pip install -r "$OPT_REQ" \
+    || echo "[WARN] clearvoice 安装失败；s1/s3/s6 仍可跑，s2+ 需要: $PYTHON_BIN -m pip install clearvoice"
+fi
+if "$PYTHON_BIN" -c "import clearvoice" 2>/dev/null; then
+  echo "[ OK ] clearvoice 已在 VE python"
+else
+  echo "[WARN] VE python 尚不能 import clearvoice"
+fi
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
+
 mkdir -p "$VM_OUT/pos" "$VM_OUT/neg" "$VM_OUT/reports" "$VM_OUT/packs" "$MOSS_CKPT_DIR"
 
 mkdir -p "$ROOT/.runtime"
@@ -318,13 +322,8 @@ export DATA_DIR="\${DATA_DIR:-$DATA_DIR}"
 export VM_OUT="\${VM_OUT:-$VM_OUT}"
 export ASR_MODEL_DIR="\${ASR_MODEL_DIR:-$ASR_MODEL_DIR}"
 export MOSS_CKPT_DIR="\${MOSS_CKPT_DIR:-$MOSS_CKPT_DIR}"
-export CLEARVOICE_ROOT="\${CLEARVOICE_ROOT:-$CLEARVOICE_ROOT}"
-EOF
-# 仅当探测到真实路径时写入，避免把不存在的默认写进 env.sh
-if [[ -n "${CLEARVOICE_PYTHON:-}" && -x "${CLEARVOICE_PYTHON}" ]]; then
-  echo "export CLEARVOICE_PYTHON=\"\${CLEARVOICE_PYTHON:-$CLEARVOICE_PYTHON}\"" >>"$ROOT/.runtime/env.sh"
-fi
-cat >>"$ROOT/.runtime/env.sh" <<EOF
+export CLEARVOICE_ROOT="\${CLEARVOICE_ROOT:-}"
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
 export PATH="\$(dirname "$PYTHON_BIN"):\$PATH"
 export PIP_INDEX_URL="${TUNA_INDEX}"
 export PIP_TRUSTED_HOST="${TUNA_HOST}"
@@ -332,6 +331,23 @@ export PIP_CONFIG_FILE="${PIP_CONF}"
 export PIP_ROOT_USER_ACTION="ignore"
 EOF
 cp -f "$ROOT/.runtime/env.sh" "$ROOT/env.sh"
+
+# 与 ve/.env_ve 对齐 PYTHON_BIN（不覆盖已有 VE 路径配置）
+if [[ -d "$ROOT/ve" ]]; then
+  if [[ ! -f "$ROOT/ve/.env_ve" ]]; then
+    cat > "$ROOT/ve/.env_ve" <<VEEOF
+export VE_ROOT="$ROOT/ve"
+export PYTHON_BIN="$PYTHON_BIN"
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
+export PATH="$(dirname "$PYTHON_BIN"):\$PATH"
+export DATA_DIR="${DATA_DIR}"
+export HF_HOME="${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/root/autodl-tmp/cache/pip}"
+VEEOF
+    echo "[OK] wrote $ROOT/ve/.env_ve"
+  fi
+fi
 
 echo "[INFO] 写出环境快照 → $VM_OUT/meta/env_snapshot.txt"
 mkdir -p "$VM_OUT/meta"
@@ -351,7 +367,7 @@ import importlib
 mods = (
     "torch", "torchaudio", "onnxruntime", "qwen_asr",
     "editdistance", "pypinyin", "soundfile", "numpy", "scipy",
-    "librosa", "soxr", "tqdm", "huggingface_hub",
+    "librosa", "soxr", "tqdm", "huggingface_hub", "clearvoice",
 )
 for m in mods:
     try:
@@ -401,11 +417,13 @@ except Exception:
 PY
 
 echo ""
-echo "setup 完成。PYTHON_BIN=$PYTHON_BIN"
+echo "setup 完成。PYTHON_BIN=$PYTHON_BIN  （VE 环境，conda 名 $ENV_NAME）"
+echo "ClearVoice 与 ASR 同一解释器: CLEARVOICE_PYTHON=$PYTHON_BIN"
 echo "接下来:"
-echo "  1) ./download_models.sh"
-echo "  2) ./check_env.sh"
-echo "  3) source ./env.sh && ./run_all.sh --limit 20"
+echo "  1) source ./env.sh          # 或: conda activate ve && source ve/.env_ve"
+echo "  2) ./download_models.sh"
+echo "  3) ./check_env.sh"
+echo "  4) ./run_sep.sh --limit 20"
 echo ""
 echo "手动覆盖 CUDA wheel 示例:"
 echo "  TORCH_CUDA=cu124 ./setup_env.sh"

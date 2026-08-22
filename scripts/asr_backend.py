@@ -134,8 +134,8 @@ class Qwen3ASRBackend(BaseASRBackend):
 
             raise ModuleNotFoundError(
                 f"当前解释器没有 qwen_asr: {sys.executable}\n"
-                f"请: conda activate qwen3-asr && pip install -U qwen-asr\n"
-                f"或: cd VM && ./setup_env.sh && source ./env.sh\n"
+                f"请: conda activate ve && pip install -U qwen-asr\n"
+                f"或: ./setup_env.sh && source ./env.sh\n"
                 f"然后确认: {sys.executable} -c 'import qwen_asr'"
             ) from e
 
