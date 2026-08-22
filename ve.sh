@@ -4,9 +4,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$ROOT/.sep-only" ]]; then
-  echo "[ERR] 当前是 extract@sep（只做 KWS 分离）。VE / Presence 请用 main：" >&2
-  echo "  git checkout main && ./ve.sh $*" >&2
-  echo "本分支入口: ./run_sep.sh" >&2
+  echo "[ERR] 当前是 extract@sep（只做 KWS 分离）。VE / Presence 请用旁边的 main 克隆：" >&2
+  echo "  cd /root/extract && ./ve.sh $*" >&2
+  echo "本目录入口: ./run_sep.sh" >&2
   exit 1
 fi
 cd "$ROOT/ve"
