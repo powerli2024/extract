@@ -23,11 +23,12 @@ VE run_all.sh — Presence-gated TSE 全流程
 ════════════════════════════════════════════════════════════
 PIPELINE（提取后端）
 ════════════════════════════════════════════════════════════
-  PIPELINE=ps4|wesep|sep_route|mix|cond_tasnet     默认: ps4
+  PIPELINE=ps4|wesep|sep_route|adaptive_route|mix|cond_tasnet     默认: ps4
 
   ps4         HF PS4 BSRNN（需 download_models.sh）
   wesep       WeSep bsrnn_ecapa（需 download_wesep.sh）
   sep_route   MossFormer 分离 + 声纹选路（需 Moss ONNX + extract/scripts）
+  adaptive_route 仅当分离流对注册声纹的增益≥ROUTE_MIN_GAIN时选分离流；否则 mix
   mix         CMD 直通 ASR（当前端到端最强基线）
   cond_tasnet Cond-TasNet（需 COND_TASNET_CKPT + ECAPA；另开 VE_OUT）
 
@@ -42,6 +43,9 @@ PIPELINE（提取后端）
   BEST_SEP_DIR        干净 KWS enroll（sep 产物）。自行指定；未设则扫描
                       pos_neg/best_sep、kws_sep/best_sep 等现成目录
                       例: BEST_SEP_DIR=/root/autodl-tmp/kws_sep/best_sep ./run_all.sh
+  STRICT_ENROLL       1=正式评测要求 best_sep 覆盖每一个 UID（默认 1）；
+                      任何缺失、ok=false 或音频缺失均失败，绝不回退原始 KWS
+  STRICT_EVAL         1=最终计分必须全 UID 覆盖、无重复且每个接受 pos 有 ASR（默认 1）
   SAMPLES             可选，跳过重建时指定 samples.jsonl
   DEVICE              默认 cuda:0
   LIMIT               分层抽样条数；0=全量（默认）
@@ -76,6 +80,8 @@ Presence 门控
   ASR_HOTWORDS=1      Qwen3 热词表 context（推荐于指令式 domain）
   ASR_DOMAIN_CONTEXT=1  智能家居指令 context，不用唤醒词
   ASR_RETRY_MISMATCH=1  hyp 与时长不匹配时二次解码，回退 mix
+  ASR_RESUME         1=仅在音频与配置未变时手动复用 ASR；正式跑分默认 0（禁用复用）
+  ROUTE_MIN_GAIN  adaptive_route 最小声纹增益，默认 0.03
   HOLDOUT_SEED        holdout 随机种子；默认 0
   ASNORM              1=AS-Norm（需 cohort）
   ENROLL_ZNORM        1=仅 enroll Z-Norm
@@ -169,6 +175,7 @@ case "$PIPELINE_LC" in
   ps4|ps4_bsrnn|bsrnn) PIPELINE=ps4; TSE_BACKEND=ps4 ;;
   wesep|wesep_bsrnn|wesep_bsrnn_ecapa) PIPELINE=wesep; TSE_BACKEND=wesep_bsrnn ;;
   sep_route|mossformer|route|sep) PIPELINE=sep_route; TSE_BACKEND=sep_route ;;
+  adaptive_route|adaptive|mix_sep_route) PIPELINE=adaptive_route; TSE_BACKEND=adaptive_route ;;
   mix|passthrough|cmd|none) PIPELINE=mix; TSE_BACKEND=mix ;;
   cond_tasnet|condtasnet|tasnet|cond-tasnet) PIPELINE=cond_tasnet; TSE_BACKEND=cond_tasnet ;;
   usef|usef_tse|usef-tse)
@@ -176,7 +183,7 @@ case "$PIPELINE_LC" in
     exit 1
     ;;
   *)
-    echo "[ERR] 未知 PIPELINE=${PIPELINE_RAW}；可选: ps4 | wesep | sep_route | mix | cond_tasnet"
+    echo "[ERR] 未知 PIPELINE=${PIPELINE_RAW}；可选: ps4 | wesep | sep_route | adaptive_route | mix | cond_tasnet"
     echo "      运行 $0 --help 查看全部环境变量"
     exit 1
     ;;
@@ -196,6 +203,9 @@ if [[ -n "${BEST_SEP_DIR:-}" ]]; then
 fi
 DEVICE="${DEVICE:-cuda:0}"
 LIMIT="${LIMIT:-0}"
+STRICT_ENROLL="${STRICT_ENROLL:-1}"
+STRICT_EVAL="${STRICT_EVAL:-1}"
+ASR_RESUME="${ASR_RESUME:-0}"
 TARGET_FRR="${TARGET_FRR:-0.02}"
 PRESENCE_BACKEND="${PRESENCE_BACKEND:-eres2netv2}"
 # 最新最佳拒识：Presence 用一次分离 + 语言分 thr；默认 raw（不开 AS-Norm）
@@ -207,7 +217,7 @@ MOSS_ONNX_PATH="${MOSS_ONNX_PATH:-/root/autodl-tmp/checkpoints/MossFormer2_ONNX/
 export MOSS_ONNX_PATH
 
 # sep_route 强制 Presence 用分离（须在打标签前）
-if [[ "$PIPELINE" == "sep_route" ]]; then
+if [[ "$PIPELINE" == "sep_route" || "$PIPELINE" == "adaptive_route" ]]; then
   USE_SEP=1
 fi
 
@@ -298,7 +308,7 @@ nvidia-smi || true
 
 need_moss=0
 [[ "$USE_SEP" == "1" ]] && need_moss=1
-[[ "$PIPELINE" == "sep_route" ]] && need_moss=1
+[[ "$PIPELINE" == "sep_route" || "$PIPELINE" == "adaptive_route" ]] && need_moss=1
 
 if [[ "$PIPELINE" == "wesep" ]]; then
   if ! "$PYTHON_BIN" -c "from wesep.cli.extractor import load_model" 2>/dev/null; then
@@ -349,6 +359,9 @@ fi
 step() { echo; echo ">>> $* <<<"; }
 
 step "[1/7] build_manifest"
+if [[ "$STRICT_ENROLL" == "1" ]]; then
+  BEST_SEP_ARGS+=(--strict-best-sep)
+fi
 "$PYTHON_BIN" "$ROOT/scripts/build_manifest.py" \
   --data-dir "$DATA_DIR" \
   "${BEST_SEP_ARGS[@]}" \
@@ -447,6 +460,7 @@ if [[ "$VETO_CAMP" == "1" ]]; then
 fi
 [[ "$VETO_WINDOWS" == "1" ]] && EXT_ARGS+=(--veto-windows)
 [[ "$PIPELINE" == "cond_tasnet" && -n "${COND_TASNET_CKPT:-}" ]] && EXT_ARGS+=(--cond-tasnet-ckpt "$COND_TASNET_CKPT")
+[[ "$PIPELINE" == "adaptive_route" ]] && EXT_ARGS+=(--route-min-gain "${ROUTE_MIN_GAIN:-0.03}")
 [[ -n "${ECAPA_DIR:-}" ]] && EXT_ARGS+=(--ecapa-dir "$ECAPA_DIR")
 
 echo "[CMD] $PYTHON_BIN $ROOT/scripts/run_extract.py ${EXT_ARGS[*]}"
@@ -494,29 +508,56 @@ else
   [[ "${ASR_HOTWORDS:-0}" == "1" ]] && ASR_ARGS+=(--hotwords)
   [[ "${ASR_DOMAIN_CONTEXT:-0}" == "1" ]] && ASR_ARGS+=(--domain-context)
   [[ "${ASR_RETRY_MISMATCH:-0}" == "1" ]] && ASR_ARGS+=(--retry-mismatch)
-  "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" "${ASR_ARGS[@]}" \
-    || echo "[WARN] asr_cer 失败（可先 ./download_qwen3_asr.sh）；extract 结果仍保留"
+  [[ "$ASR_RESUME" != "1" ]] && ASR_ARGS+=(--no-resume)
+  if ! "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" "${ASR_ARGS[@]}"; then
+    if [[ "$STRICT_EVAL" == "1" ]]; then
+      echo "[ERR] ASR 失败；STRICT_EVAL=1 禁止复用历史报告继续跑分"; exit 1
+    fi
+    echo "[WARN] asr_cer 失败（非严格模式保留 extract 结果）"
+  fi
 fi
 
 step "[6/7] extra_reject + submit result.json"
+FINAL_DECISIONS="$VE_OUT/results/all_results.jsonl"
 if [[ "$EXTRA_REJECT" != "1" ]]; then
   echo "[INFO] EXTRA_REJECT=0，跳过叠话加拒"
 elif [[ ! -f "$VE_OUT/reports/asr_cer/asr_results.jsonl" ]]; then
   echo "[WARN] 无 asr_cer jsonl，跳过 overlay。稍后: VE_OUT=$VE_OUT ./run_next_lift.sh submit"
 else
+  OVERLAY_NO_NEG_ASR=0
   if [[ "${SKIP_NEG_ASR:-0}" != "1" ]]; then
     echo "[arm] ASR 过门 neg（叠话加拒）"
-    "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" \
-      --ve-out "$VE_OUT" --model-dir "${ASR_MODEL_DIR:-${QWEN3_ASR_DIR:-/root/autodl-tmp/Qwen3-ASR-1.7B}}" \
-      --device "$DEVICE" --neg-fa --out-dir "$VE_OUT/reports/asr_neg_fa" \
-      || echo "[WARN] neg-fa ASR 失败；无 hyp 的 FA 不会被文本加拒"
+    NEG_ASR_ARGS=(--ve-out "$VE_OUT" --model-dir "${ASR_MODEL_DIR:-${QWEN3_ASR_DIR:-/root/autodl-tmp/Qwen3-ASR-1.7B}}" \
+      --device "$DEVICE" --neg-fa --out-dir "$VE_OUT/reports/asr_neg_fa")
+    [[ "$ASR_RESUME" != "1" ]] && NEG_ASR_ARGS+=(--no-resume)
+    if ! "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" "${NEG_ASR_ARGS[@]}"; then
+      if [[ "$STRICT_EVAL" == "1" ]]; then
+        echo "[ERR] neg-fa ASR 失败；STRICT_EVAL=1 禁止使用历史 neg ASR"; exit 1
+      fi
+      echo "[WARN] neg-fa ASR 失败；本轮禁用文本加拒的 neg hyp"
+      OVERLAY_NO_NEG_ASR=1
+    fi
+  else
+    OVERLAY_NO_NEG_ASR=1
   fi
   OVERLAY_ARGS=(--ve-out "$VE_OUT" --asr-pos "$VE_OUT/reports/asr_cer/asr_results.jsonl" --no-camp --write-result --tag submit)
+  [[ "$OVERLAY_NO_NEG_ASR" == "1" ]] && OVERLAY_ARGS+=(--no-neg-asr)
   [[ "$LOCKED_THR" == "1" ]] && OVERLAY_ARGS+=(--locked-thr)
   "$PYTHON_BIN" "$ROOT/scripts/apply_lift_overlay.py" "${OVERLAY_ARGS[@]}"
+  OVERLAY_ROWS="$VE_OUT/reports/lift_overlay/submit_rows.jsonl"
+  if [[ ! -f "$OVERLAY_ROWS" ]]; then
+    echo "[ERR] overlay 未写出 $OVERLAY_ROWS"; exit 1
+  fi
+  FINAL_DECISIONS="$OVERLAY_ROWS"
 fi
 
 step "[7/7] done"
+if [[ "${SKIP_ASR:-0}" != "1" ]]; then
+  step "[final] official character-weighted evaluation"
+  FINAL_ARGS=(--ve-out "$VE_OUT" --decisions "$FINAL_DECISIONS")
+  [[ "$STRICT_EVAL" == "1" ]] && FINAL_ARGS+=(--strict)
+  "$PYTHON_BIN" "$ROOT/scripts/final_evaluate.py" "${FINAL_ARGS[@]}"
+fi
 echo "PIPELINE=$PIPELINE"
 echo "thr: $THR_FILE"
 echo "reports: $VE_OUT/reports"

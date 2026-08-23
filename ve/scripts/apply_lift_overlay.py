@@ -23,6 +23,7 @@ from lift_common import (
     window_veto,
 )
 from paths import default_ve_out, ensure_dir
+from asr_cer import normalize_for_cer
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -96,7 +97,7 @@ def write_result_json(
     *,
     extra_reject: str = "len_and_nontask_gray",
 ) -> None:
-    """竞赛 pos 列表：拒识 content 空、cer=1；接受写 hyp。"""
+    """竞赛 pos 列表：拒识 content 空、cer=1；汇总使用官方字符加权 CER。"""
     pos = [r for r in rows if r.get("split") == "pos"]
     pos.sort(key=lambda r: (_row_id(r) is None, _row_id(r) or 0, str(r.get("uid") or "")))
     results = []
@@ -128,11 +129,52 @@ def write_result_json(
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def official_metrics(rows: list[dict[str, Any]], pred_fn) -> dict[str, float | int]:
+    """官方 CER：总(S+I+D)/总参考字符数；拒绝/失败正样本 errors=N。"""
+    errors = chars = n_pos = n_neg = n_rej_neg = 0
+    for r in rows:
+        if r.get("split") == "neg":
+            n_neg += 1
+            n_rej_neg += int(bool(pred_fn(r)))
+            continue
+        if r.get("split") != "pos":
+            continue
+        n_pos += 1
+        ref = normalize_for_cer(r.get("cmd_text") or r.get("label"))
+        n_ref = len(ref)
+        if pred_fn(r) or r.get("asr_status") != "ok":
+            errors += n_ref
+            chars += n_ref
+            continue
+        n = int(r.get("ref_chars") or n_ref)
+        dist = r.get("edit_distance")
+        if n <= 0:
+            continue
+        if dist is None:
+            errors += n
+        else:
+            errors += int(dist)
+        chars += n
+    cer = errors / chars if chars else 0.0
+    rr = n_rej_neg / n_neg if n_neg else 0.0
+    return {
+        "cer": cer,
+        "rr": rr,
+        "contest": 0.5 * rr + 0.5 * (1.0 - cer),
+        "total_errors": errors,
+        "total_ref_chars": chars,
+        "n_pos": n_pos,
+        "n_neg": n_neg,
+        "n_rej_neg": n_rej_neg,
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="文本加拒 + camp/窗否决（只加拒）")
     p.add_argument("--ve-out", type=Path, default=None)
     p.add_argument("--asr-pos", type=Path, default=None, help="asr_results.jsonl")
     p.add_argument("--asr-neg", type=Path, default=None, help="neg FA 的 asr_results.jsonl（补 hyp）")
+    p.add_argument("--no-neg-asr", action="store_true", help="本轮不读取任何历史 neg ASR 结果")
     p.add_argument("--neg", type=Path, default=None)
     p.add_argument("--samples", type=Path, default=None)
     p.add_argument("--tag", default=None, help="写出 reports/lift_overlay/<tag>.json")
@@ -154,7 +196,7 @@ def main() -> int:
     neg = load_jsonl(neg_path) if neg_path.is_file() else []
     neg_hyp = {}
     asr_neg = args.asr_neg or (ve / "reports" / "asr_neg_fa" / "asr_results.jsonl")
-    if asr_neg.is_file():
+    if (not args.no_neg_asr) and asr_neg.is_file():
         for r in load_jsonl(asr_neg):
             uid = r.get("uid")
             if uid:
@@ -197,6 +239,9 @@ def main() -> int:
             "split": split,
             "lang": lang,
             "cer": cer,
+            "asr_status": r.get("status"),
+            "edit_distance": r.get("edit_distance"),
+            "ref_chars": r.get("n"),
             "score": score,
             "thr": thr,
             "file_thr": file_thr,
@@ -230,6 +275,9 @@ def main() -> int:
     m_file = contest_metrics(rows, lambda r: r["file_rej"])
     m_cos = contest_metrics(rows, lambda r: r["base_rej"])
     m1 = contest_metrics(rows, pred)
+    m_file_official = official_metrics(rows, lambda r: r["file_rej"])
+    m_cos_official = official_metrics(rows, lambda r: r["base_rej"])
+    m1_official = official_metrics(rows, pred)
     n_extra_pos = sum(1 for r in rows if r["split"] == "pos" and (not r["base_rej"]) and pred(r))
     n_extra_neg = sum(1 for r in rows if r["split"] == "neg" and (not r["base_rej"]) and pred(r))
     # overlay 仍拒的原误拒 pos 不需要 ASR；只统计 overlay 新放行且从未接受过的 pos
@@ -248,17 +296,20 @@ def main() -> int:
         "locked_thr": bool(args.locked_thr),
         "zh_thr": ZH_THR,
         "en_thr": EN_THR,
-        "file_extract": round_metrics(m_file),
-        "cosine_only": round_metrics(m_cos),
-        "overlay": round_metrics(m1),
-        "d_contest_vs_file": round(m1["contest"] - m_file["contest"], 6),
-        "d_contest_vs_cosine": round(m1["contest"] - m_cos["contest"], 6),
+        "file_extract_macro_diagnostic": round_metrics(m_file),
+        "cosine_only_macro_diagnostic": round_metrics(m_cos),
+        "overlay_macro_diagnostic": round_metrics(m1),
+        "file_extract_official": round_metrics(m_file_official),
+        "cosine_only_official": round_metrics(m_cos_official),
+        "overlay_official": round_metrics(m1_official),
+        "d_contest_vs_file": round(float(m1_official["contest"]) - float(m_file_official["contest"]), 6),
+        "d_contest_vs_cosine": round(float(m1_official["contest"]) - float(m_cos_official["contest"]), 6),
         "n_extra_pos": n_extra_pos,
         "n_extra_neg": n_extra_neg,
         "n_need_asr": n_need_asr,
         "extra_reject": extra_tag,
-        "note": "n_need_asr>0 时新放行 pos 仍按 CER=1 保守估计",
-        "go_vs_file": bool((m1["contest"] - m_file["contest"]) >= 0.005 and n_extra_pos <= 5),
+        "note": "overlay_macro_diagnostic 仅供历史对照；overlay_official 是正式字符加权口径。n_need_asr>0 时新放行 pos 仍按 CER=1 保守估计。",
+        "go_vs_file": bool((float(m1_official["contest"]) - float(m_file_official["contest"])) >= 0.005 and n_extra_pos <= 5),
     }
     od = ensure_dir(ve / "reports" / "lift_overlay")
     jp = od / f"{tag}.json"
@@ -267,9 +318,10 @@ def main() -> int:
         f"# lift overlay `{tag}`",
         "",
         f"- locked_thr={args.locked_thr} zh={ZH_THR} en={EN_THR}",
-        f"- file contest={out['file_extract']['contest']} RR={out['file_extract']['rr']}",
-        f"- cosine contest={out['cosine_only']['contest']} RR={out['cosine_only']['rr']}",
-        f"- overlay contest={out['overlay']['contest']} RR={out['overlay']['rr']} CER={out['overlay']['cer']}",
+        f"- file official contest={out['file_extract_official']['contest']} RR={out['file_extract_official']['rr']} CER={out['file_extract_official']['cer']}",
+        f"- cosine official contest={out['cosine_only_official']['contest']} RR={out['cosine_only_official']['rr']} CER={out['cosine_only_official']['cer']}",
+        f"- overlay macro diagnostic contest={out['overlay_macro_diagnostic']['contest']} RR={out['overlay_macro_diagnostic']['rr']} CER={out['overlay_macro_diagnostic']['cer']}",
+        f"- overlay official contest={out['overlay_official']['contest']} RR={out['overlay_official']['rr']} CER={out['overlay_official']['cer']}",
         f"- Δ vs file={out['d_contest_vs_file']}  extra_pos={n_extra_pos} extra_neg={n_extra_neg} need_asr={n_need_asr}",
         "",
     ]
@@ -299,8 +351,8 @@ def main() -> int:
     write_jsonl(od / f"{tag}_rows.jsonl", dump_rows)
     if args.write_result or tag == "submit":
         rp = args.result_json or (ve / "reports" / "submit" / "result.json")
-        write_result_json(rp, rows, pred, m1, extra_reject=extra_tag)
-        print(f"[OK] result.json → {rp} contest={round(m1['contest'], 6)} RR={round(m1['rr'], 6)}")
+        write_result_json(rp, rows, pred, m1_official, extra_reject=extra_tag)
+        print(f"[OK] result.json → {rp} contest={round(float(m1_official['contest']), 6)} RR={round(float(m1_official['rr']), 6)}")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print(f"[OK] {jp}")
     return 0

@@ -11,10 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from calibrate_presence import sweep_thresholds  # noqa: E402
+from apply_lift_overlay import official_metrics  # noqa: E402
+from asr_cer import compute_cer  # noqa: E402
 from report_ve import summarize, write_run_reports  # noqa: E402
 
 
 def main() -> int:
+    # 官方 CER 不截断：1 个参考字符、额外插入 2 个字符 => CER=2。
+    assert compute_cer("a", "abc")["cer"] == 2.0
+    weighted = official_metrics([
+        {"split": "pos", "cmd_text": "甲", "asr_status": "ok", "ref_chars": 1, "edit_distance": 0},
+        {"split": "pos", "cmd_text": "乙丙丁戊", "asr_status": "asr_error", "ref_chars": 4},
+        {"split": "neg"},
+    ], lambda r: r.get("split") == "neg")
+    assert weighted["cer"] == 0.8 and weighted["rr"] == 1.0
+    print("official cer ok", weighted)
+
     scores = (
         [("present", 0.9)] * 50
         + [("present", 0.2)] * 1  # 1/51 ≈ 2% FRR at thr=0.25

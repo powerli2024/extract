@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -76,19 +77,21 @@ def resolve_best_sep_wav(best_sep: Path, rec: dict[str, Any]) -> str:
     return str((best_sep / rel).resolve()) if rel else dest
 
 
-def load_best_sep_index(best_sep: Path) -> dict[str, dict[str, Any]]:
-    """uid → best_sep record。"""
+def load_best_sep_index(best_sep: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """uid → best_sep record，并返回 index 内重复 UID。"""
     idx = best_sep / "index.jsonl"
     out: dict[str, dict[str, Any]] = {}
+    duplicates: list[str] = []
     for r in load_jsonl(idx):
-        if not r.get("ok", True):
-            continue
         uid = str(r.get("uid") or "")
         if not uid:
             continue
-        dest = resolve_best_sep_wav(best_sep, r)
+        if uid in out:
+            duplicates.append(uid)
+        # 非严格兼容仍取最后一条；严格模式会因 duplicate 失败。
+        dest = resolve_best_sep_wav(best_sep, r) if r.get("ok", True) else ""
         out[uid] = {**r, "enroll_wav": dest}
-    return out
+    return out, duplicates
 
 
 def load_dataset_split(data_dir: Path, split: str) -> list[dict[str, Any]]:
@@ -101,8 +104,9 @@ def build_items(
     data_dir: Path,
     best_sep: Path,
     splits: list[str],
+    strict_best_sep: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    enroll_map = load_best_sep_index(best_sep)
+    enroll_map, duplicate_best_sep_uid = load_best_sep_index(best_sep)
     items: list[dict[str, Any]] = []
     qc = {
         "n_dataset": 0,
@@ -110,6 +114,9 @@ def build_items(
         "missing_enroll": [],
         "missing_cmd": [],
         "missing_best_sep_uid": [],
+        "invalid_best_sep_uid": [],
+        "duplicate_best_sep_uid": sorted(set(duplicate_best_sep_uid)),
+        "duplicate_dataset_uid": [],
         "by_split": {},
     }
 
@@ -119,22 +126,32 @@ def build_items(
         label = "present" if split == "pos" else "absent"
         rows = load_dataset_split(data_dir, split)
         n_ok = 0
+        seen_dataset_uids: set[str] = set()
         for row in rows:
             qc["n_dataset"] += 1
             sid = row.get("id")
             uid = f"{split}_{sid}"
+            if uid in seen_dataset_uids:
+                qc["duplicate_dataset_uid"].append(uid)
+            seen_dataset_uids.add(uid)
             wake_rel = row.get("唤醒音频") or row.get("wake_audio") or ""
             cmd_rel = row.get("识别音频") or row.get("cmd_audio") or ""
             wake_text = row.get("唤醒文本") or row.get("wake_text") or ""
             cmd_text = row.get("识别文本") or row.get("cmd_text")
             enroll_rec = enroll_map.get(uid)
             enroll_wav = ""
-            if enroll_rec:
+            if enroll_rec and enroll_rec.get("ok", True):
                 enroll_wav = str(enroll_rec.get("enroll_wav") or "")
             else:
-                qc["missing_best_sep_uid"].append(uid)
-                # 回退 dataset 原始 kws
-                if wake_rel:
+                if enroll_rec:
+                    qc["invalid_best_sep_uid"].append({
+                        "uid": uid,
+                        "reason": enroll_rec.get("error") or enroll_rec.get("reason") or "best_sep_ok_false",
+                    })
+                else:
+                    qc["missing_best_sep_uid"].append(uid)
+                # 兼容旧实验：非严格模式允许回退。正式 KWS 提纯对比必须关闭回退。
+                if (not strict_best_sep) and wake_rel:
                     enroll_wav = str((data_dir / wake_rel).resolve())
 
             cmd_wav = str((data_dir / cmd_rel).resolve()) if cmd_rel else ""
@@ -157,9 +174,9 @@ def build_items(
                 "wake_text": wake_text,
                 "cmd_text": cmd_text,
                 "lang": lang_of(str(wake_text)),
-                "enroll_source": "best_sep" if enroll_rec else "dataset_kws",
+                "enroll_source": "best_sep" if (enroll_rec and enroll_rec.get("ok", True)) else "dataset_kws",
             }
-            if enroll_rec:
+            if enroll_rec and enroll_rec.get("ok", True):
                 item["enroll_meta"] = {
                     "best_stage": enroll_rec.get("best_stage"),
                     "oracle_stream": enroll_rec.get("oracle_stream"),
@@ -188,6 +205,10 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--out-dir", type=Path, default=None, help="默认 VE_OUT/manifest")
     p.add_argument("--splits", default="pos,neg")
+    p.add_argument(
+        "--strict-best-sep", action="store_true",
+        help="正式评测：每个 dataset UID 都必须有 ok=true 的 best_sep 注册波；禁止回退原始 KWS 或缩小分母。",
+    )
     return p.parse_args()
 
 
@@ -203,7 +224,12 @@ def main() -> int:
     print(f"[INFO] best_sep={best_sep}")
     print(f"[INFO] out_dir={out_dir}")
 
-    items, qc = build_items(data_dir=data_dir, best_sep=best_sep, splits=splits)
+    items, qc = build_items(
+        data_dir=data_dir,
+        best_sep=best_sep,
+        splits=splits,
+        strict_best_sep=bool(args.strict_best_sep),
+    )
     write_jsonl(out_dir / "samples.jsonl", items)
 
     enroll_rows = [
@@ -235,7 +261,7 @@ def main() -> int:
     write_jsonl(out_dir / "cmd_manifest.jsonl", cmd_rows)
 
     contract = {
-        "version": 1,
+        "version": 2,
         "label_rule": {"pos": "present", "neg": "absent"},
         "reject_policy": "speaker_absent_only",
         "fields": {
@@ -257,9 +283,15 @@ def main() -> int:
             },
         },
         "qc": qc,
+        "strict_best_sep": bool(args.strict_best_sep),
         "n_samples": len(items),
         "data_dir": str(data_dir),
         "best_sep": str(best_sep),
+        "best_sep_index_sha256": (
+            hashlib.sha256((best_sep / "index.jsonl").read_bytes()).hexdigest()
+            if (best_sep / "index.jsonl").is_file()
+            else None
+        ),
     }
     (out_dir / "contract.json").write_text(
         json.dumps(contract, ensure_ascii=False, indent=2) + "\n",
@@ -273,6 +305,18 @@ def main() -> int:
     print(f"[OK] samples={len(items)} → {out_dir / 'samples.jsonl'}")
     print(f"[OK] enrollment_manifest → {out_dir / 'enrollment_manifest.jsonl'}")
     print(f"[OK] missing_enroll={len(qc['missing_enroll'])} missing_cmd={len(qc['missing_cmd'])}")
+    strict_failures = (
+        qc["missing_enroll"]
+        or qc["missing_cmd"]
+        or qc["missing_best_sep_uid"]
+        or qc["invalid_best_sep_uid"]
+        or qc["duplicate_best_sep_uid"]
+        or qc["duplicate_dataset_uid"]
+        or len(items) != qc["n_dataset"]
+    )
+    if args.strict_best_sep and strict_failures:
+        print("[ERR] strict-best-sep 契约失败；已写出 qc.json，禁止使用不完整/回退注册波跑分")
+        return 2
     return 0 if not qc["missing_cmd"] else 2
 
 

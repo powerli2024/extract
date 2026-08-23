@@ -5,6 +5,7 @@ PIPELINE / --tse-backend:
   ps4         — PS4 BSRNN（默认）
   wesep_bsrnn — WeSep 官方 bsrnn_ecapa_vox1
   sep_route   — MossFormer 分离 + enroll 声纹选路（强制 use_sep）
+  adaptive_route — 分离流声纹显著优于 mix 时才选分离流（强制 use_sep）
   mix         — CMD mix 直通 ASR（不做 TSE）
 
 产物:
@@ -66,6 +67,9 @@ def normalize_backend(name: str) -> str:
         "mossformer": "sep_route",
         "route": "sep_route",
         "sep": "sep_route",
+        "adaptive_route": "adaptive_route",
+        "adaptive": "adaptive_route",
+        "mix_sep_route": "adaptive_route",
         "cond_tasnet": "cond_tasnet",
         "condtasnet": "cond_tasnet",
         "tasnet": "cond_tasnet",
@@ -78,7 +82,7 @@ def normalize_backend(name: str) -> str:
     }
     if b not in aliases:
         raise SystemExit(
-            f"未知 --tse-backend={name!r}；可选: ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet"
+            f"未知 --tse-backend={name!r}；可选: ps4 | wesep_bsrnn | sep_route | adaptive_route | mix | cond_tasnet"
         )
     return aliases[b]
 
@@ -108,11 +112,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tse-backend",
         default="ps4",
-        help="ps4 | wesep_bsrnn | sep_route | mix | cond_tasnet",
+        help="ps4 | wesep_bsrnn | sep_route | adaptive_route | mix | cond_tasnet",
     )
     p.add_argument("--cond-tasnet-ckpt", type=Path, default=None)
     p.add_argument("--ecapa-dir", type=Path, default=None)
     p.add_argument("--tasnet-chunk-sec", type=float, default=4.0)
+    p.add_argument("--route-min-gain", type=float, default=0.03,
+                   help="adaptive_route 选择分离流所需的最小声纹增益")
     p.add_argument("--ps4-weights", type=Path, default=None)
     p.add_argument("--wesep-dir", type=Path, default=None, help="兼容旧参数")
     p.add_argument("--wesep-model-dir", type=Path, default=None)
@@ -177,7 +183,7 @@ def parse_args() -> argparse.Namespace:
 def resolve_sep_depth(args: argparse.Namespace, backend: str) -> int:
     if args.sep_depth >= 0:
         return int(args.sep_depth)
-    if backend == "sep_route" or args.use_sep:
+    if backend in ("sep_route", "adaptive_route") or args.use_sep:
         return 1
     return 0
 
@@ -284,8 +290,8 @@ def main() -> int:
         raise SystemExit(
             "sep_depth>=1 需要 MossFormer。请 ./download_moss_onnx.sh（extract/scripts/mossformer2_onnx.py）"
         )
-    if backend == "sep_route" and sep is None:
-        raise SystemExit("PIPELINE=sep_route 需要 MossFormer")
+    if backend in ("sep_route", "adaptive_route") and sep is None:
+        raise SystemExit(f"PIPELINE={backend} 需要 MossFormer")
 
     score_norm = None
     if want_mode != "raw":
@@ -364,6 +370,7 @@ def main() -> int:
             cond_tasnet_ckpt=args.cond_tasnet_ckpt,
             ecapa_dir=args.ecapa_dir,
             tasnet_chunk_sec=float(args.tasnet_chunk_sec),
+            route_min_gain=float(args.route_min_gain),
         )
 
     results_dir = ensure_dir(ve_out / "results")
@@ -432,7 +439,7 @@ def main() -> int:
                 rec["extracted_wav"] = None
                 if debug_dir and extractor is not None:
                     try:
-                        if backend == "sep_route":
+                        if backend in ("sep_route", "adaptive_route"):
                             dbg, meta = extractor.extract(
                                 cmd,
                                 enroll,
@@ -452,7 +459,7 @@ def main() -> int:
             elif do_extract and extractor is not None:
                 t1 = time.time()
                 try:
-                    if backend == "sep_route":
+                    if backend in ("sep_route", "adaptive_route"):
                         out, meta = extractor.extract(
                             cmd,
                             enroll,

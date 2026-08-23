@@ -9,7 +9,7 @@ ASR 调用（对齐 VM/scripts/asr_backend.py）:
     results = model.transcribe(audio=[(wav_f32, 16000), ...], language=Chinese/English, context=wake_text)
     text = results[i].text
 
-CER（对齐 VM/scripts/cer_metrics.py，正常字符 CER，不用拼音）:
+CER（对齐官方 cer计算方法.txt，正常字符 CER，不用拼音）:
     normalize_for_cer: NFKC → 去空白 → 去标点 → 小写 → strip
     CER = editdistance(ref, hyp) / len(ref)   ==   (S + D + I) / N
 
@@ -151,7 +151,8 @@ def compute_cer(ref: str, hyp: str) -> dict[str, Any]:
                 "cer": cer, "ref_aligned": "_" * len(hyp), "hyp_aligned": hyp}
     dist = _edit_distance(ref, hyp)
     s, d, ins, ra, ha = levenshtein_detail(ref, hyp)
-    cer = min(1.0, dist / n)  # CER 上界=1：插入过多导致的 >1 截断到 1
+    # 官方 CER=(S+I+D)/N；插入很多时可大于 1，不能人为截断。
+    cer = dist / n
     return {"s": s, "d": d, "i": ins, "n": n, "dist": dist, "cer": round(cer, 6),
             "ref_aligned": ra, "hyp_aligned": ha}
 
@@ -344,13 +345,16 @@ def base_record(sample: dict[str, Any], res: dict[str, Any], norm_ver: str) -> d
 
 
 def fixed_record(sample: dict[str, Any], res: dict[str, Any], status: str,
-                 note: str, norm_ver: str) -> dict[str, Any]:
+                  note: str, norm_ver: str) -> dict[str, Any]:
     rec = base_record(sample, res, norm_ver)
+    ref_norm = normalize_for_cer(sample.get("cmd_text"))
     rec.update({
         "wav": None, "dur_sec": None,
-        "cmd_text": sample.get("cmd_text"), "ref_norm": None,
+        "cmd_text": sample.get("cmd_text"), "ref_norm": ref_norm,
         "asr_text": None, "hyp_norm": None,
-        "s": None, "d": None, "i": None, "n": None, "edit_distance": None,
+        # 误拒/处理失败按该条 CER=1，等价于错误数=N。
+        "s": None, "d": len(ref_norm), "i": 0, "n": len(ref_norm),
+        "edit_distance": len(ref_norm),
         "cer": 1.0,
         "ref_aligned": None, "hyp_aligned": None,
         "status": status, "error": note, "asr_ms": None,
@@ -586,6 +590,20 @@ def process_chunk(args: argparse.Namespace,
 
 
 # ------------------------- 统计汇总 -------------------------
+def _effective_error_and_ref(record: dict[str, Any]) -> tuple[int, int]:
+    """为最终字符加权 CER 返回 (errors, N)。失败记录按 CER=1 计 errors=N。"""
+    ref = str(record.get("ref_norm") or normalize_for_cer(record.get("cmd_text")))
+    n = int(record.get("n") or len(ref))
+    if n <= 0:
+        return (0, 0)
+    if record.get("decision") != "accept" or record.get("status") != "ok":
+        return (n, n)
+    dist = record.get("edit_distance")
+    if dist is not None:
+        return (int(dist), n)
+    return (round(float(record.get("cer") or 1.0) * n), n)
+
+
 def build_summary(records: list[dict[str, Any]], rr: Optional[float],
                   meta: dict[str, Any]) -> dict[str, Any]:
     n = len(records)
@@ -597,7 +615,15 @@ def build_summary(records: list[dict[str, Any]], rr: Optional[float],
     cer_accept = [r["cer"] for r in accepted]
     cer_ok = [r["cer"] for r in ok]
 
-    total = round(sum(cer_all) / n, 6) if n else 0.0
+    # `cer_total` 是正式主指标：所有正样本的总错误数 / 总参考字符数。
+    # 对误拒和任何失败，错误数按该条参考字符数计，因而该条 CER=1。
+    total_errors, total_chars = (0, 0)
+    for r in records:
+        errors, chars = _effective_error_and_ref(r)
+        total_errors += errors
+        total_chars += chars
+    total = round(total_errors / total_chars, 6) if total_chars else 0.0
+    total_macro = round(sum(cer_all) / n, 6) if n else 0.0
     accepted_mean = round(sum(cer_accept) / len(cer_accept), 6) if cer_accept else None
     ok_mean = round(sum(cer_ok) / len(cer_ok), 6) if cer_ok else None
 
@@ -645,6 +671,9 @@ def build_summary(records: list[dict[str, Any]], rr: Optional[float],
         "n_cer0_accepted": sum(1 for r in ok if r["cer"] == 0.0),
         "n_cer1_accepted": sum(1 for r in accepted if (r.get("cer") or 0) >= 1.0),
         "cer_total": total,
+        "cer_total_macro": total_macro,
+        "total_errors": total_errors,
+        "total_ref_chars": total_chars,
         "cer_accepted_mean": accepted_mean,
         "cer_ok_mean": ok_mean,
         "cer_p50": quantile(0.5), "cer_p90": quantile(0.9), "cer_p95": quantile(0.95),
@@ -667,7 +696,9 @@ def md_summary(s: dict[str, Any]) -> str:
         "",
         f"- pos 样本: {s['n_pos']}（accept={s['n_accepted']}, 其他={s['n_rejected_or_other']}）",
         f"- ASR 成功: {s['n_asr_ok']}, 失败/空转写: {s['n_asr_error_or_empty']}",
-        f"- **CER_total（竞赛口径, 误拒=1）= {s['cer_total']}**",
+        f"- **CER_total（官方字符加权口径，误拒=1）= {s['cer_total']}**"
+        f"（errors={s['total_errors']} / chars={s['total_ref_chars']}）",
+        f"- CER_total_macro（逐样本平均，仅诊断）= {s['cer_total_macro']}",
         f"- CER_accepted_mean（仅接受样本真实 CER）= {s['cer_accepted_mean']}",
         f"- CER_ok_mean（ASR 成功且非空转写）= {s['cer_ok_mean']}",
         f"- CER=0 的接受样本数: {s['n_cer0_accepted']}",
@@ -954,5 +985,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
