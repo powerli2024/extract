@@ -31,6 +31,17 @@ EXTRA_REJECT=0 LIMIT=0 ./run_all.sh
 
 要求 `reports/final_eval/summary.json` 中 coverage errors 为 0；否则本轮不可参与排名。
 
+若报告中出现 `empty_hyp`，可只重跑空文本 UID（保留其他 ASR 记录）。该路径先用中文领域 context 复解；仍为空时回退 raw CMD mix：
+
+```bash
+VE_OUT=/root/autodl-tmp/DatasetA_best_v2 \
+./run_asr_cer.sh --retry-mismatch \
+  --only-uids pos_119,pos_2050,pos_2220
+
+python scripts/final_evaluate.py \
+  --ve-out /root/autodl-tmp/DatasetA_best_v2 --strict
+```
+
 ## 2. 用所有正样本的真实 mix ASR 优化门控
 
 该实验忽略旧门控，强制将每个正样本的原始 CMD mix 送入同一个 ASR。因此降低阈值后新增放行的正样本也有真实编辑距离，不再用 FRR 冒充 CER。
@@ -67,6 +78,8 @@ EXP_ROOT=/root/autodl-tmp/ve_goal/smoke \
 PIPELINES=mix,sep_route,adaptive_route,wesep,ps4 \
 LIMIT=64 SKIP_ASR=0 ./run_compare_pipelines.sh
 ```
+
+`LIMIT>0` 是设备与模型可用性冒烟，不是正式评测；脚本会自动关闭严格全量覆盖校验，不能用其 `final_eval` 分数排名或上线。
 
 冒烟通过后全量跑。所有臂使用同一冻结门控，差异只来自送给 ASR 的波形：
 

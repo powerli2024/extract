@@ -112,6 +112,10 @@ def duration_mismatch(
     """无文本全错代理：长音频却几乎没字，或字数与时长严重不符。"""
     t = "".join(ch for ch in (hyp or "") if not ch.isspace())
     n = len(t)
+    # 空假设不是“短语音可能本来就短”，而是明确的 ASR 失败信号。
+    # 必须在短 CMD（如 1.6 s）上也触发带 context / raw-mix 的回退。
+    if n == 0:
+        return True
     if dur_sec is None or dur_sec <= 0:
         return n <= 1
     d = float(dur_sec)

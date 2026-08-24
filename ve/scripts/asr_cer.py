@@ -754,6 +754,11 @@ def parse_args() -> argparse.Namespace:
                    help="使用智能家居领域指令 context（T1；官方更推荐 --hotwords）")
     p.add_argument("--retry-mismatch", action="store_true",
                    help="hyp 与时长严重不匹配时二次解码（Chinese+领域），再不行回退 mix")
+    p.add_argument(
+        "--only-uids",
+        default="",
+        help="只重跑逗号分隔的 pos UID；默认 resume 保留其余已有 ASR 记录",
+    )
     p.add_argument("--neg-fa", action="store_true",
                    help="只转写 Presence 接受的 neg，写出 asr_results.jsonl（叠话加拒用）")
     p.add_argument("--limit", type=int, default=0, help="只跑前 N 条待ASR样本（冒烟）")
@@ -848,6 +853,11 @@ def main() -> int:
     samples = load_jsonl(samples_path)
     all_res = {r["uid"]: r for r in load_jsonl(results_path)}
     pos = [s for s in samples if s.get("split") == "pos"]
+    only_uids = {x.strip() for x in str(args.only_uids or "").split(",") if x.strip()}
+    known_pos_uids = {str(s["uid"]) for s in pos}
+    unknown_only = sorted(only_uids - known_pos_uids)
+    if unknown_only:
+        raise SystemExit(f"--only-uids 中不存在的 pos UID: {unknown_only}")
     neg_rows = load_jsonl(neg_path) if neg_path.is_file() else []
     n_neg = len(neg_rows)
     rr = round(sum(1 for r in neg_rows if r.get("decision") == "reject") / n_neg, 6) if n_neg else None
@@ -858,10 +868,14 @@ def main() -> int:
     if args.resume and out_path.is_file():
         n_stale = 0
         for r in load_jsonl(out_path):
-            if r.get("norm_ver") != norm_ver:
-                continue
             uid = r.get("uid")
             if not uid:
+                continue
+            # 定点修复时，未选 UID 原样保留，避免因 retry 配置变化而全量重跑。
+            if only_uids and str(uid) not in only_uids:
+                done[str(uid)] = r
+                continue
+            if r.get("norm_ver") != norm_ver:
                 continue
             cur = all_res.get(uid) or {}
             cur_dec = cur.get("decision")
@@ -908,7 +922,8 @@ def main() -> int:
     if args.limit and args.limit > 0:
         tasks = tasks[: args.limit]
 
-    print(f"[INFO] pos 总数={len(pos)} 已跳过={len(done)} 待ASR={len(tasks)} 口径固定CER=1={len(fixed)}")
+    scope = f"only_uids={len(only_uids)}" if only_uids else "all_pos"
+    print(f"[INFO] scope={scope} pos 总数={len(pos)} 已跳过={len(done)} 待ASR={len(tasks)} 口径固定CER=1={len(fixed)}")
     print(f"[INFO] norm_ver={norm_ver} rr={rr} thr={thr}")
 
     asr = None
@@ -985,4 +1000,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

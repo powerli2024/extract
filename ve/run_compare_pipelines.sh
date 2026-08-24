@@ -28,6 +28,12 @@ export CALIB_DIR="${CALIB_DIR:-$CALIB_ROOT/reports/presence_calib_${PRESENCE_BAC
 
 LIMIT="${LIMIT:-0}"
 SKIP_ASR="${SKIP_ASR:-0}"
+STRICT_EVAL_REQUESTED="${STRICT_EVAL:-1}"
+STRICT_EVAL_EFFECTIVE="$STRICT_EVAL_REQUESTED"
+if [[ "$LIMIT" != "0" && "$STRICT_EVAL_REQUESTED" == "1" ]]; then
+  STRICT_EVAL_EFFECTIVE=0
+  echo "[WARN] LIMIT=$LIMIT 只生成子集 decision；自动 STRICT_EVAL=0。冒烟结果不可作为全量排名或上线依据。"
+fi
 PIPELINES_CSV="${PIPELINES:-mix,sep_route,adaptive_route,wesep,ps4,cond_tasnet}"
 EXP_ROOT="${EXP_ROOT:-/root/autodl-tmp/ve_goal/pipelines}"
 mkdir -p "$EXP_ROOT"
@@ -63,14 +69,18 @@ for pl in "${PLS[@]}"; do
     SKIP_CALIB="$SKIP_CALIB" \
     LOCKED_THR="${LOCKED_THR:-1}" \
     STRICT_ENROLL="${STRICT_ENROLL:-1}" \
-    STRICT_EVAL="${STRICT_EVAL:-1}" \
+    STRICT_EVAL="$STRICT_EVAL_EFFECTIVE" \
     ASR_RESUME="${ASR_RESUME:-0}" \
     ASR_RETRY_MISMATCH="${ASR_RETRY_MISMATCH:-1}" \
     EXTRA_REJECT="${EXTRA_REJECT:-0}" \
     LIMIT="$LIMIT" \
     SKIP_ASR="$SKIP_ASR" \
     bash "$ROOT/run_all.sh"; then
-    printf 'ok\n' > "$out/arm_status.txt"
+    if [[ "$LIMIT" == "0" && "$STRICT_EVAL_EFFECTIVE" == "1" ]]; then
+      printf 'ok_strict_full\n' > "$out/arm_status.txt"
+    else
+      printf 'ok_smoke_non_strict limit=%s\n' "$LIMIT" > "$out/arm_status.txt"
+    fi
   else
     ec=$?
     printf 'failed exit=%s\n' "$ec" > "$out/arm_status.txt"

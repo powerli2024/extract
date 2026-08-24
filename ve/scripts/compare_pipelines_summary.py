@@ -87,6 +87,7 @@ def row_for(root: Path) -> dict[str, Any]:
                 + int(coverage.get("duplicate_asr") or 0),
             }
         )
+        out["eligible"] = out["coverage_errors"] == 0
     elif thr and out.get("rr") is not None and out.get("frr") is not None:
         # 无 ASR 时用 FRR 代理 CER（与校准口径一致，仅供对照）
         rr = float(out["rr"])
@@ -125,26 +126,28 @@ def main() -> int:
         "竞赛分: `0.5*RR + 0.5*(1-CER_total)`；误拒 pos 记 CER=1。",
         "Presence 各方案应接近（共享 thr）；差异主要来自提取质量 → CER。",
         "",
-        "| pipeline | RR | FRR | FAR | CER_micro | CER_accept | **score** | coverage errors | n_accept | p50_ms |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| pipeline | eligible | RR | FRR | FAR | CER_micro | CER_accept | **score** | coverage errors | n_accept | p50_ms |",
+        "|---|:---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     ranked = sorted(
         rows,
         key=lambda r: (
-            -(r["contest_final"] if r.get("contest_final") is not None else -1.0),
+            -(1 if r.get("eligible") else 0),
+            -(r["contest_final"] if r.get("eligible") and r.get("contest_final") is not None else -1.0),
             r.get("cer_final") if r.get("cer_final") is not None else 9.0,
         ),
     )
     for r in ranked:
         lines.append(
-            "| {pipe} | {rr} | {frr} | {far} | {cer} | {cera} | **{c}** | {cov} | {na} | {lat} |".format(
+            "| {pipe} | {eligible} | {rr} | {frr} | {far} | {cer} | {cera} | **{c}** | {cov} | {na} | {lat} |".format(
                 pipe=r["pipeline"],
+                eligible="Y" if r.get("eligible") else "N",
                 rr=fmt(r.get("rr_final") if r.get("rr_final") is not None else r.get("rr")),
                 frr=fmt(r.get("frr")),
                 far=fmt(r.get("far")),
                 cer=fmt(r.get("cer_final")),
                 cera=fmt(r.get("cer_accepted")),
-                c=fmt(r.get("contest_final")),
+                c=fmt(r.get("contest_final")) if r.get("eligible") else "-",
                 cov=fmt(r.get("coverage_errors"), 0),
                 na=fmt(r.get("n_accept") or r.get("n_accepted_asr"), 0),
                 lat=fmt(r.get("latency_p50_ms"), 1),
