@@ -78,7 +78,7 @@ def main() -> int:
     duplicate_asr = len(asr_rows) - len(asr)
 
     rows: list[dict[str, Any]] = []
-    n_pos = n_neg = n_rej_neg = 0
+    n_pos = n_neg = n_rej_neg = n_rej_pos = n_pos_missing_decision = 0
     errors = chars = 0
     macro_cers: list[float] = []
     coverage_errors: list[str] = []
@@ -98,6 +98,10 @@ def main() -> int:
             ref = normalize_for_cer(sample.get("cmd_text"))
             if rejected or missing_decision:
                 err, n, cer, status = len(ref), len(ref), 1.0, "rejected"
+                if rejected:
+                    n_rej_pos += 1
+                else:
+                    n_pos_missing_decision += 1
             else:
                 err, n, cer, status = asr_errors(asr.get(uid), ref)
                 if status != "ok" and status != "ok_empty_ref":
@@ -119,14 +123,22 @@ def main() -> int:
     cer_micro = errors / chars if chars else 0.0
     cer_macro = sum(macro_cers) / len(macro_cers) if macro_cers else 0.0
     rr = n_rej_neg / n_neg if n_neg else 0.0
+    frr = n_rej_pos / n_pos if n_pos else 0.0
+    n_acc_neg = n_neg - n_rej_neg
     summary = {
         "metric_version": "official_character_weighted_v1",
         "metric": "score=0.5*RR_neg + 0.5*(1-CER_pos_micro); rejected pos has errors=N",
         "n_pos": n_pos,
         "n_neg": n_neg,
         "n_neg_rejected": n_rej_neg,
+        "n_neg_accepted": n_acc_neg,
         "rr_neg": rr,
+        "far_neg_diagnostic": n_acc_neg / n_neg if n_neg else 0.0,
+        "n_pos_false_reject": n_rej_pos,
+        "n_pos_missing_decision": n_pos_missing_decision,
+        "frr_pos": frr,
         "cer_pos_micro": cer_micro,
+        "cer": cer_micro,
         "cer_pos_macro_diagnostic": cer_macro,
         "pos_total_errors": errors,
         "pos_total_ref_chars": chars,
@@ -140,16 +152,25 @@ def main() -> int:
     }
     (out_dir / "rows.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (out_dir / "summary.md").write_text(
-        "# VE final evaluation\n\n"
-        f"- **CER_pos_micro** = {cer_micro:.6f} ({errors}/{chars})\n"
-        f"- CER_pos_macro (diagnostic) = {cer_macro:.6f}\n"
-        f"- **RR_neg** = {rr:.6f} ({n_rej_neg}/{n_neg})\n"
-        f"- **contest_score** = {summary['contest_score']:.6f}\n"
-        f"- coverage errors = {len(coverage_errors)}\n",
-        encoding="utf-8",
+    md = (
+        "# VE final evaluation（正式口径）\n\n"
+        "## 主指标\n\n"
+        f"- **负样本 RR** = {rr:.6f}（正确拒识 {n_rej_neg}/{n_neg}；误接收 {n_acc_neg}）\n"
+        f"- **正样本 FRR** = {frr:.6f}（误拒 {n_rej_pos}/{n_pos}）\n"
+        f"- **正样本 CER** = {cer_micro:.6f}（字符错误 {errors}/{chars}；误拒/ASR 失败按该条 CER=1）\n"
+        f"- **竞赛分** = `(RR + 1 - CER) / 2` = **{summary['contest_score']:.6f}**\n\n"
+        "## 诊断\n\n"
+        f"- FAR（负样本误接收率）= {summary['far_neg_diagnostic']:.6f}\n"
+        f"- CER 宏平均（仅诊断）= {cer_macro:.6f}\n"
+        f"- coverage errors = {len(coverage_errors)}\n"
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    (out_dir / "summary.md").write_text(md, encoding="utf-8")
+    print("=== FINAL OFFICIAL METRICS ===")
+    print(f"NEG  RR={rr:.6f}  correct_reject={n_rej_neg}/{n_neg}  false_accept={n_acc_neg}")
+    print(f"POS  FRR={frr:.6f}  false_reject={n_rej_pos}/{n_pos}  CER={cer_micro:.6f} ({errors}/{chars})")
+    print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score']:.6f}")
+    print(f"COVERAGE errors={len(coverage_errors)} duplicate_decisions={duplicate_dec} duplicate_asr={duplicate_asr}")
+    print(f"[OK] summary → {out_dir / 'summary.json'}")
     if args.strict and (coverage_errors or duplicate_dec or duplicate_asr):
         print("[ERR] strict final evaluation coverage failed", file=sys.stderr)
         return 2

@@ -100,6 +100,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if present_rs:
             n_p = len(present_rs)
             n_p_rej = sum(1 for r in present_rs if r.get("decision") == "reject")
+            block["n_present_false_reject"] = n_p_rej
             block["frr"] = _pct(n_p_rej, n_p)
             cers = [_pos_cer(r) for r in present_rs]
             known = [c for c in cers if c is not None]
@@ -115,6 +116,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             n_a = len(absent_rs)
             n_a_acc = sum(1 for r in absent_rs if r.get("decision") == "accept")
             n_a_rej = sum(1 for r in absent_rs if r.get("decision") == "reject")
+            block["n_absent_correct_reject"] = n_a_rej
+            block["n_absent_false_accept"] = n_a_acc
             block["far"] = _pct(n_a_acc, n_a)
             block["rr"] = _pct(n_a_rej, n_a)
         out["splits"][split] = block
@@ -126,18 +129,27 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     pos_cers = [_pos_cer(r) for r in pos]
     missing_asr = sum(1 for c in pos_cers if c is None)
     out["overall"]["rr"] = rr
+    n_pos_false_reject = sum(1 for r in pos if r.get("decision") == "reject")
+    out["overall"]["n_pos"] = len(pos)
+    out["overall"]["n_neg"] = len(neg)
+    out["overall"]["n_pos_false_reject"] = n_pos_false_reject
+    out["overall"]["frr"] = _pct(n_pos_false_reject, len(pos)) if pos else 0.0
+    # 只用 Presence 决策可得到的代理分，用于门控调试；不是最终竞赛分。
+    out["overall"]["presence_proxy_score"] = contest_score(
+        rr, out["overall"]["frr"]
+    )
     if missing_asr:
         out["overall"]["cer"] = None
-        out["overall"]["contest_score"] = None
         out["overall"]["cer_pending_asr"] = missing_asr
         out["overall"]["metric"] = (
-            "CER/contest 需先跑 ./run_asr_cer.sh（accept 不得默认 CER=0）"
+            "最终 CER/竞赛分需先跑 ./run_asr_cer.sh + final_evaluate.py"
         )
     else:
-        cer = (sum(pos_cers) / len(pos)) if pos else 0.0  # type: ignore[arg-type]
-        out["overall"]["cer"] = round(float(cer), 4)
-        out["overall"]["contest_score"] = contest_score(rr, float(cer))
-        out["overall"]["metric"] = "0.5*RR + 0.5*(1-CER); present mis-reject => CER=1"
+        cer_macro = (sum(pos_cers) / len(pos)) if pos else 0.0  # type: ignore[arg-type]
+        out["overall"]["cer_macro_diagnostic"] = round(float(cer_macro), 4)
+        out["overall"]["metric"] = (
+            "CER 宏平均仅诊断；最终字符加权 CER/竞赛分见 final_evaluate.py"
+        )
 
     bad_reasons = [
         r["uid"]
@@ -185,13 +197,16 @@ def write_run_reports(
         json.dumps(meta or {}, ensure_ascii=False, indent=2),
         "```",
         "",
-        "## Overall",
+        "## Presence 预览（非最终排名）",
         "",
         f"- n={summary['overall']['n']} accept={summary['overall']['n_accept']} "
         f"reject={summary['overall']['n_reject']}",
-        f"- **contest_score** = 0.5*RR + 0.5*(1-CER) = "
-        f"**{summary['overall'].get('contest_score')}** "
-        f"(RR={summary['overall'].get('rr')}, CER={summary['overall'].get('cer')})",
+        f"- 负样本 RR={summary['overall'].get('rr')}；正样本 FRR="
+        f"{summary['overall'].get('frr')}（误拒 {summary['overall'].get('n_pos_false_reject')}/"
+        f"{summary['overall'].get('n_pos')}）",
+        f"- Presence proxy = 0.5*RR + 0.5*(1-FRR) = "
+        f"**{summary['overall'].get('presence_proxy_score')}**（只用于门控诊断）",
+        "- 最终 **CER** 与 **contest_score** 必须读取 `reports/final_eval/summary.json`。",
         f"- decisions: `{summary['overall'].get('decisions')}`",
         f"- latency: `{summary['overall'].get('latency_ms')}`",
         "",
@@ -203,13 +218,19 @@ def write_run_reports(
         lines.append("")
         lines.append(f"- n={b['n']} accept_rate={b['accept_rate']} reject_rate={b['reject_rate']}")
         if "frr" in b:
-            lines.append(f"- FRR(present mis-reject)={b['frr']}")
+            lines.append(
+                f"- FRR(present mis-reject)={b['frr']} "
+                f"({b.get('n_present_false_reject')}/{b.get('n_present')})"
+            )
         if "cer" in b:
             lines.append(f"- CER(pos; mis-reject=1)={b['cer']}")
         if "far" in b:
             lines.append(f"- FAR(absent mis-accept)={b['far']}")
         if "rr" in b:
-            lines.append(f"- RR(neg correct-reject)={b['rr']}")
+            lines.append(
+                f"- RR(neg correct-reject)={b['rr']} "
+                f"({b.get('n_absent_correct_reject')}/{b.get('n_absent')})"
+            )
         lines.append(f"- mean_presence_score={b['mean_presence_score']}")
         lines.append("")
 

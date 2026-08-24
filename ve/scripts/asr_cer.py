@@ -604,11 +604,18 @@ def _effective_error_and_ref(record: dict[str, Any]) -> tuple[int, int]:
     return (round(float(record.get("cer") or 1.0) * n), n)
 
 
-def build_summary(records: list[dict[str, Any]], rr: Optional[float],
-                  meta: dict[str, Any]) -> dict[str, Any]:
+def build_summary(
+    records: list[dict[str, Any]],
+    rr: Optional[float],
+    meta: dict[str, Any],
+    *,
+    n_neg: int = 0,
+    n_neg_rejected: int = 0,
+) -> dict[str, Any]:
     n = len(records)
     accepted = [r for r in records if r.get("decision") == "accept"]
     rejected = [r for r in records if r.get("decision") != "accept"]
+    false_reject = [r for r in records if r.get("decision") == "reject"]
     ok = [r for r in accepted if r.get("status") == "ok"]
     err = [r for r in accepted if r.get("status") != "ok"]
     cer_all = [r["cer"] for r in records]
@@ -653,10 +660,26 @@ def build_summary(records: list[dict[str, Any]], rr: Optional[float],
     for lang in sorted({r.get("lang") for r in records}):
         rr_ = [r for r in records if r.get("lang") == lang]
         acc = [r for r in rr_ if r.get("decision") == "accept"]
+        lang_errors, lang_chars = (0, 0)
+        for r in rr_:
+            errors, chars = _effective_error_and_ref(r)
+            lang_errors += errors
+            lang_chars += chars
+        acc_errors, acc_chars = (0, 0)
+        for r in acc:
+            errors, chars = _effective_error_and_ref(r)
+            acc_errors += errors
+            acc_chars += chars
         by_lang[lang] = {
             "n": len(rr_), "n_accepted": len(acc),
-            "cer_total": round(sum(r["cer"] for r in rr_) / len(rr_), 6),
-            "cer_accepted": round(sum(r["cer"] for r in acc) / len(acc), 6) if acc else None,
+            "cer_total": round(lang_errors / lang_chars, 6) if lang_chars else 0.0,
+            "total_errors": lang_errors,
+            "total_ref_chars": lang_chars,
+            "cer_total_macro_diagnostic": round(sum(r["cer"] for r in rr_) / len(rr_), 6),
+            "cer_accepted": round(acc_errors / acc_chars, 6) if acc_chars else None,
+            "cer_accepted_macro_diagnostic": (
+                round(sum(r["cer"] for r in acc) / len(acc), 6) if acc else None
+            ),
         }
 
     worst = sorted(accepted, key=lambda r: -(r.get("cer") or 0.0))[:20]
@@ -666,6 +689,9 @@ def build_summary(records: list[dict[str, Any]], rr: Optional[float],
         "n_pos": n,
         "n_accepted": len(accepted),
         "n_rejected_or_other": len(rejected),
+        "n_pos_false_reject": len(false_reject),
+        "n_pos_nonaccept_other": len(rejected) - len(false_reject),
+        "frr_pos": round(len(false_reject) / n, 6) if n else 0.0,
         "n_asr_ok": len(ok),
         "n_asr_error_or_empty": len(err),
         "n_cer0_accepted": sum(1 for r in ok if r["cer"] == 0.0),
@@ -680,6 +706,9 @@ def build_summary(records: list[dict[str, Any]], rr: Optional[float],
         "cer_histogram_accepted": dict(hist),
         "by_lang": by_lang,
         "rr": rr,
+        "n_neg": n_neg,
+        "n_neg_rejected": n_neg_rejected,
+        "n_neg_accepted": max(0, n_neg - n_neg_rejected),
         "contest_score_new": round(0.5 * rr + 0.5 * (1 - total), 6) if rr is not None else None,
         "worst_20": [
             {"uid": r["uid"], "cer": r.get("cer"), "status": r.get("status"),
@@ -694,17 +723,24 @@ def md_summary(s: dict[str, Any]) -> str:
     lines = [
         "# VE pos 真实 CER（Qwen3-ASR-1.7B，正常字符 CER）",
         "",
+        "## 主指标（ASR 阶段；最终以 final_eval 为准）",
+        "",
+        f"- **负样本 RR** = {s['rr']}（正确拒识 {s['n_neg_rejected']}/{s['n_neg']}；误接收 {s['n_neg_accepted']}）",
+        f"- **正样本 FRR** = {s['frr_pos']:.6f}（误拒 {s['n_pos_false_reject']}/{s['n_pos']}）",
+        f"- **正样本 CER** = {s['cer_total']}（字符错误 {s['total_errors']}/{s['total_ref_chars']}）",
+        f"- **竞赛分** = `(RR + 1 - CER) / 2` = {s['contest_score_new']}",
+        "",
+        "## ASR 诊断",
+        "",
         f"- pos 样本: {s['n_pos']}（accept={s['n_accepted']}, 其他={s['n_rejected_or_other']}）",
         f"- ASR 成功: {s['n_asr_ok']}, 失败/空转写: {s['n_asr_error_or_empty']}",
-        f"- **CER_total（官方字符加权口径，误拒=1）= {s['cer_total']}**"
-        f"（errors={s['total_errors']} / chars={s['total_ref_chars']}）",
+        f"- CER 字符加权口径（误拒=1）: {s['cer_total']}",
         f"- CER_total_macro（逐样本平均，仅诊断）= {s['cer_total_macro']}",
         f"- CER_accepted_mean（仅接受样本真实 CER）= {s['cer_accepted_mean']}",
         f"- CER_ok_mean（ASR 成功且非空转写）= {s['cer_ok_mean']}",
         f"- CER=0 的接受样本数: {s['n_cer0_accepted']}",
         f"- **CER=1 桶（接受样本）: {s.get('n_cer1_accepted')}**",
         f"- 分位: p50={s['cer_p50']} p90={s['cer_p90']} p95={s['cer_p95']}",
-        f"- RR={s['rr']} → 新 contest_score = 0.5*RR + 0.5*(1-CER_total) = {s['contest_score_new']}",
         "",
         "## CER 直方图（接受样本）",
         "",
@@ -987,12 +1023,27 @@ def main() -> int:
         "elapsed_sec": round(time.time() - t0, 2), "ve_out": str(ve_out),
         "n_written": len(ordered),
     }
-    summary = build_summary(ordered, rr, meta)
+    summary = build_summary(
+        ordered,
+        rr,
+        meta,
+        n_neg=n_neg,
+        n_neg_rejected=sum(1 for r in neg_rows if r.get("decision") == "reject"),
+    )
     (out_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (out_dir / "summary.md").write_text(md_summary(summary), encoding="utf-8")
 
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print("=== ASR STAGE METRICS ===")
+    print(
+        f"NEG  RR={summary['rr']}  correct_reject={summary['n_neg_rejected']}/{summary['n_neg']} "
+        f"false_accept={summary['n_neg_accepted']}"
+    )
+    print(
+        f"POS  FRR={summary['frr_pos']:.6f}  false_reject={summary['n_pos_false_reject']}/{summary['n_pos']} "
+        f"CER={summary['cer_total']:.6f} ({summary['total_errors']}/{summary['total_ref_chars']})"
+    )
+    print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score_new']}")
     print(f"[OK] asr_results.jsonl → {out_path}（{len(ordered)} 条）")
     print(f"[OK] summary → {out_dir}")
     return 0
