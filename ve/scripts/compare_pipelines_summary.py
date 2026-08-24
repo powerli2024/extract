@@ -18,6 +18,8 @@ DEFAULT_ROOTS = [
     "/root/autodl-tmp/ve_ps4",
     "/root/autodl-tmp/ve_wesep",
     "/root/autodl-tmp/ve_sep_route",
+    "/root/autodl-tmp/ve_adaptive_route",
+    "/root/autodl-tmp/ve_cond_tasnet",
 ]
 
 
@@ -35,12 +37,14 @@ def row_for(root: Path) -> dict[str, Any]:
     asr = _load_json(root / "reports" / "asr_cer" / "summary.json")
     ve = _load_json(root / "reports" / "summary.json")
     thr = _load_json(root / "reports" / "presence_calib" / "recommended_thr.json")
+    final = _load_json(root / "reports" / "final_eval" / "summary.json")
 
     out: dict[str, Any] = {
         "pipeline": name.replace("ve_", "", 1) if name.startswith("ve_") else name,
         "root": str(root),
         "ok_asr": asr is not None,
         "ok_extract": ve is not None,
+        "ok_final": final is not None,
     }
     if ve:
         ov = ve.get("overall") or {}
@@ -69,6 +73,18 @@ def row_for(root: Path) -> dict[str, Any]:
                 "n_pos_asr": asr.get("n_pos"),
                 "n_accepted_asr": asr.get("n_accepted"),
                 "by_lang": asr.get("by_lang"),
+            }
+        )
+    if final:
+        coverage = final.get("coverage") or {}
+        out.update(
+            {
+                "rr_final": final.get("rr_neg"),
+                "cer_final": final.get("cer_pos_micro"),
+                "contest_final": final.get("contest_score"),
+                "coverage_errors": len(coverage.get("errors") or [])
+                + int(coverage.get("duplicate_decisions") or 0)
+                + int(coverage.get("duplicate_asr") or 0),
             }
         )
     elif thr and out.get("rr") is not None and out.get("frr") is not None:
@@ -109,35 +125,35 @@ def main() -> int:
         "竞赛分: `0.5*RR + 0.5*(1-CER_total)`；误拒 pos 记 CER=1。",
         "Presence 各方案应接近（共享 thr）；差异主要来自提取质量 → CER。",
         "",
-        "| pipeline | RR | FRR | FAR | CER_total | CER_accept | **contest** | n_accept | p50_ms | ASR |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        "| pipeline | RR | FRR | FAR | CER_micro | CER_accept | **score** | coverage errors | n_accept | p50_ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     ranked = sorted(
         rows,
         key=lambda r: (
-            -(r["contest"] if r.get("contest") is not None else -1.0),
-            r.get("cer_total") if r.get("cer_total") is not None else 9.0,
+            -(r["contest_final"] if r.get("contest_final") is not None else -1.0),
+            r.get("cer_final") if r.get("cer_final") is not None else 9.0,
         ),
     )
     for r in ranked:
         lines.append(
-            "| {pipe} | {rr} | {frr} | {far} | {cer} | {cera} | **{c}** | {na} | {lat} | {asr} |".format(
+            "| {pipe} | {rr} | {frr} | {far} | {cer} | {cera} | **{c}** | {cov} | {na} | {lat} |".format(
                 pipe=r["pipeline"],
-                rr=fmt(r.get("rr")),
+                rr=fmt(r.get("rr_final") if r.get("rr_final") is not None else r.get("rr")),
                 frr=fmt(r.get("frr")),
                 far=fmt(r.get("far")),
-                cer=fmt(r.get("cer_total")),
+                cer=fmt(r.get("cer_final")),
                 cera=fmt(r.get("cer_accepted")),
-                c=fmt(r.get("contest")),
+                c=fmt(r.get("contest_final")),
+                cov=fmt(r.get("coverage_errors"), 0),
                 na=fmt(r.get("n_accept") or r.get("n_accepted_asr"), 0),
                 lat=fmt(r.get("latency_p50_ms"), 1),
-                asr="Y" if r.get("ok_asr") else "N",
             )
         )
 
     lines += ["", "## 详情路径", ""]
     for r in ranked:
-        lines.append(f"- `{r['pipeline']}`: `{r['root']}/reports/asr_cer/summary.md`")
+        lines.append(f"- `{r['pipeline']}`: `{r['root']}/reports/final_eval/summary.md`")
         bl = r.get("by_lang")
         if bl:
             lines.append(f"  - by_lang: `{json.dumps(bl, ensure_ascii=False)}`")

@@ -156,4 +156,4 @@ STREAM_POLICY=strict_rescue USE_SEP=1 PIPELINE=mix SKIP_ASR=1 EXTRA_REJECT=0 \
 VE_OUT=/root/autodl-tmp/vp_policy_strict ./run_all.sh
 ```
 
-先比较 holdout FAR/FRR，并用 seed `0/17/43` 复跑。安全门：`strict_rescue` 的 holdout FAR 不高于 `mix` 的置信区间上界，且 FRR 有稳定下降；否则部署使用 `mix`，不使用分离救援。过安全门后才跑同一 mix ASR 的真实 contest。
+固定 FAR 只用于观察负样本右尾风险，不是上线选择指标。正式选择必须先对**全部正样本**用同一固定后端（首选 raw mix）获得真实 ASR 编辑距离，再运行 `scripts/optimize_gate_for_score.py`，按严格覆盖的 holdout `0.5*RR+0.5*(1-CER_micro)` 比较。若多 seed 的均值优势不稳定或 p05 为负，继续保留冻结 `max` 门控，不因 in-sample 最优而替换。

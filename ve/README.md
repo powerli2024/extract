@@ -100,7 +100,7 @@ VD 可用 RMS/ASR/SIM 多条件拒识；VE **只保留「人不在」**（`rejec
 
 1. `PIPELINE=mix EXTRA_REJECT=0`：严格注册波 + 纯 Presence 基线；仅替换 KWS 提纯版本。
 2. `PIPELINE=adaptive_route EXTRA_REJECT=0`：统一的、标签无关的 mix/分离流路由；调 `ROUTE_MIN_GAIN`，阈值需在独立开发集重新冻结。
-3. `PIPELINE=sep_route`、PS4、WeSep、Cond-TasNet：作为候选目标提取臂，与阶段 2 做同 manifest 的配对比较。
+3. `PIPELINE=sep_route`、PS4、WeSep、Cond-TasNet：作为候选目标提取臂，与阶段 2 做同 manifest 的配对比较。完整的最终分数实验与命令见 [`GOAL_EXPERIMENTS.md`](GOAL_EXPERIMENTS.md)。
 4. `EXTRA_REJECT=1`：仅在独立开发集冻结文本/多编码器加拒，再在测试集报告为后置增强结果；不要用于归因 KWS 注册提纯。
 
 每一臂都以 `reports/final_eval/summary.json` 为唯一最终口径，并保存 `best_sep/index.jsonl` 的 SHA-256。

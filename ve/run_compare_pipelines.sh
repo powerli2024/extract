@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 四方案对照：共享 Presence 校准（按 VAD/sep/lang 分桶），再分别提取 + ASR
+# TSE/直通 ASR 对照：所有方案共享冻结 Presence 门控，再严格最终计分。
 #
-#   ps4 | wesep | sep_route | mix
+#   mix | sep_route | adaptive_route | wesep | ps4 | cond_tasnet
 #
 # 用法（AutoDL）:
 #   LIMIT=64 SKIP_ASR=1 ./run_compare_pipelines.sh
@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 [[ -f "$ROOT/.env_ve" ]] && source "$ROOT/.env_ve" || true
 
-export ENROLL_VAD="${ENROLL_VAD:-1}"
+export ENROLL_VAD="${ENROLL_VAD:-0}"
 export USE_SEP="${USE_SEP:-1}"
 export LANG_SPLIT="${LANG_SPLIT:-1}"
 export PRESENCE_BACKEND="${PRESENCE_BACKEND:-eres2netv2}"
@@ -28,12 +28,14 @@ export CALIB_DIR="${CALIB_DIR:-$CALIB_ROOT/reports/presence_calib_${PRESENCE_BAC
 
 LIMIT="${LIMIT:-0}"
 SKIP_ASR="${SKIP_ASR:-0}"
-PIPELINES_CSV="${PIPELINES:-ps4,wesep,sep_route,mix}"
+PIPELINES_CSV="${PIPELINES:-mix,sep_route,adaptive_route,wesep,ps4,cond_tasnet}"
+EXP_ROOT="${EXP_ROOT:-/root/autodl-tmp/ve_goal/pipelines}"
+mkdir -p "$EXP_ROOT"
 
 echo "=== run_compare_pipelines ==="
 echo "CALIB_DIR=$CALIB_DIR ENROLL_VAD=$ENROLL_VAD HOLDOUT_FRAC=$HOLDOUT_FRAC"
 echo "PIPELINES=$PIPELINES_CSV LIMIT=$LIMIT SKIP_ASR=$SKIP_ASR"
-echo "产物目录: /root/autodl-tmp/ve_<pipeline>_${VAD_TAG}/"
+echo "产物目录: $EXP_ROOT/<pipeline>/"
 
 IFS=',' read -r -a PLS <<< "$PIPELINES_CSV"
 first=1
@@ -42,6 +44,8 @@ for pl in "${PLS[@]}"; do
   [[ -z "$pl" ]] && continue
   echo
   echo "########## PIPELINE=$pl VAD=$VAD_TAG ##########"
+  out="$EXP_ROOT/$pl"
+  mkdir -p "$out"
   if [[ "$first" == "1" ]]; then
     SKIP_CALIB=0
     first=0
@@ -53,12 +57,25 @@ for pl in "${PLS[@]}"; do
   else
     export FORCE_CALIB=0
   fi
-  # 不显式锁死 VE_OUT：交给 run_all 按 pipeline+vad 命名，保证并存
-  PIPELINE="$pl" \
+  # 每个实验臂使用独立目录；失败被记录，但不阻断其余模型。
+  if VE_OUT="$out" \
+    PIPELINE="$pl" \
     SKIP_CALIB="$SKIP_CALIB" \
+    LOCKED_THR="${LOCKED_THR:-1}" \
+    STRICT_ENROLL="${STRICT_ENROLL:-1}" \
+    STRICT_EVAL="${STRICT_EVAL:-1}" \
+    ASR_RESUME="${ASR_RESUME:-0}" \
+    ASR_RETRY_MISMATCH="${ASR_RETRY_MISMATCH:-1}" \
+    EXTRA_REJECT="${EXTRA_REJECT:-0}" \
     LIMIT="$LIMIT" \
     SKIP_ASR="$SKIP_ASR" \
-    bash "$ROOT/run_all.sh"
+    bash "$ROOT/run_all.sh"; then
+    printf 'ok\n' > "$out/arm_status.txt"
+  else
+    ec=$?
+    printf 'failed exit=%s\n' "$ec" > "$out/arm_status.txt"
+    echo "[WARN] $pl 失败，记录后继续其他实验臂"
+  fi
 done
 
 echo
@@ -66,13 +83,22 @@ echo "=== 汇总 CER 报告路径 ==="
 for pl in "${PLS[@]}"; do
   pl="$(echo "$pl" | tr '[:upper:]' '[:lower:]' | xargs)"
   [[ -z "$pl" ]] && continue
-  s="/root/autodl-tmp/ve_${pl}_${VAD_TAG}/reports/asr_cer/summary.md"
+  s="$EXP_ROOT/$pl/reports/final_eval/summary.md"
   if [[ -f "$s" ]]; then
     echo "---- $pl ($VAD_TAG) ----"
     head -n 25 "$s" || true
   else
-    echo "[ ] $pl 尚无 asr_cer: $s"
+    echo "[ ] $pl 尚无严格 final_eval: $s"
   fi
 done
 echo "thr: $CALIB_DIR/recommended_thr.json"
+roots=""
+for pl in "${PLS[@]}"; do
+  pl="$(echo "$pl" | tr '[:upper:]' '[:lower:]' | xargs)"
+  [[ -z "$pl" ]] && continue
+  [[ -n "$roots" ]] && roots+=","
+  roots+="$EXP_ROOT/$pl"
+done
+"${PYTHON_BIN:-python}" "$ROOT/scripts/compare_pipelines_summary.py" \
+  --roots "$roots" --out "$EXP_ROOT/pipelines_summary.md"
 echo "done."
