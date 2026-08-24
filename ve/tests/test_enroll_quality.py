@@ -32,6 +32,24 @@ def test_clean_keyword_signal_has_finite_metrics() -> None:
     assert metrics["clip_ratio"] == 0
 
 
+def test_borderline_short_keyword_is_review_not_reject() -> None:
+    metrics = {
+        "nonfinite_ratio": 0.0,
+        "duration_sec": 0.44,
+        "active_sec": 0.32,
+        "rms_dbfs": -18.0,
+        "clip_ratio": 0.0,
+        "dc_abs": 0.0,
+        "speech_ratio": 0.72,
+        "occupied_bandwidth_hz": 900.0,
+    }
+    decision, _score, reasons, review = assess(metrics, QualityPolicy())
+    assert decision == "review"
+    assert reasons == []
+    assert "short_duration" in review
+    assert "limited_active_speech" in review
+
+
 def test_embedding_stability_is_review_until_labeled_validation() -> None:
     metrics = {
         "nonfinite_ratio": 0.0,

@@ -10,6 +10,7 @@ transparent convenience summary, not a learned predictor of downstream FAR.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import math
 import os
@@ -27,9 +28,11 @@ EPS = 1e-12
 
 @dataclass(frozen=True)
 class QualityPolicy:
-    min_duration_sec: float = 0.55
+    min_duration_sec: float = 0.30
+    review_min_duration_sec: float = 0.55
     max_duration_sec: float = 4.0
-    min_active_sec: float = 0.35
+    min_active_sec: float = 0.20
+    review_min_active_sec: float = 0.35
     min_rms_dbfs: float = -42.0
     review_rms_dbfs: float = -34.0
     max_rms_dbfs: float = -6.0
@@ -38,7 +41,6 @@ class QualityPolicy:
     max_dc_abs: float = 0.03
     min_speech_ratio: float = 0.20
     review_speech_ratio: float = 0.35
-    min_bandwidth_hz: float = 1800.0
     min_embedding_stability: float = 0.55
     review_embedding_stability: float = 0.72
 
@@ -168,8 +170,18 @@ def assess(metrics: dict[str, Any], policy: QualityPolicy) -> tuple[str, float, 
 
     hard(metrics["nonfinite_ratio"] > 0, "nonfinite_samples", 50)
     hard(metrics["duration_sec"] < policy.min_duration_sec, "too_short", 35)
+    soft(
+        policy.min_duration_sec <= metrics["duration_sec"] < policy.review_min_duration_sec,
+        "short_duration",
+        10,
+    )
     soft(metrics["duration_sec"] > policy.max_duration_sec, "too_long", 8)
     hard(metrics["active_sec"] < policy.min_active_sec, "insufficient_active_speech", 35)
+    soft(
+        policy.min_active_sec <= metrics["active_sec"] < policy.review_min_active_sec,
+        "limited_active_speech",
+        10,
+    )
     hard(metrics["rms_dbfs"] < policy.min_rms_dbfs, "level_too_low", 30)
     hard(metrics["rms_dbfs"] > policy.max_rms_dbfs, "level_too_high", 25)
     hard(metrics["clip_ratio"] > policy.max_clip_ratio, "severe_clipping", 30)
@@ -180,8 +192,7 @@ def assess(metrics: dict[str, Any], policy: QualityPolicy) -> tuple[str, float, 
     soft(metrics["clip_ratio"] > policy.review_clip_ratio, "some_clipping", 8)
     soft(metrics["speech_ratio"] < policy.review_speech_ratio, "much_silence", 8)
     # A short vowel-heavy wake phrase can legitimately have a low spectral
-    # roll-off.  Bandwidth is diagnostic only until calibrated on real captures.
-    soft(metrics["occupied_bandwidth_hz"] < policy.min_bandwidth_hz, "limited_bandwidth", 6)
+    # roll-off. Bandwidth stays in raw metrics but never changes the decision.
 
     stability = metrics.get("embedding_stability")
     if stability is not None:
@@ -331,10 +342,37 @@ def main() -> int:
 
     counts = {name: sum(r["decision"] == name for r in rows) for name in ("pass", "review", "reject")}
     valid_scores = [float(r["quality_score"]) for r in rows]
+    reject_reason_counts = Counter(
+        reason for row in rows for reason in row.get("reject_reasons", [])
+    )
+    review_reason_counts = Counter(
+        reason for row in rows for reason in row.get("review_reasons", [])
+    )
+    metric_quantiles: dict[str, dict[str, float]] = {}
+    for key in (
+        "duration_sec",
+        "active_sec",
+        "speech_ratio",
+        "rms_dbfs",
+        "clip_ratio",
+        "occupied_bandwidth_hz",
+        "embedding_stability",
+    ):
+        vals = [float(row[key]) for row in rows if row.get(key) is not None]
+        if vals:
+            q = np.percentile(np.asarray(vals, dtype=np.float64), [5, 50, 95])
+            metric_quantiles[key] = {
+                "p05": round(float(q[0]), 6),
+                "p50": round(float(q[1]), 6),
+                "p95": round(float(q[2]), 6),
+            }
     summary = {
         "contract": "label_free_enrollment_quality_v1",
         "n": len(rows),
         "counts": counts,
+        "reject_reason_counts": dict(reject_reason_counts.most_common()),
+        "review_reason_counts": dict(review_reason_counts.most_common()),
+        "metric_quantiles": metric_quantiles,
         "quality_score_mean": round(float(np.mean(valid_scores)), 3) if valid_scores else None,
         "backend": args.backend,
         "uses_cmd_audio": False,
