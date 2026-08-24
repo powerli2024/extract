@@ -70,3 +70,7 @@ git clone -b sep https://github.com/powerli2024/extract.git extract-sep
 根目录 `./ve.sh submit` 等同 `cd ve && ./run_next_lift.sh submit`。
 
 细节见 [`ve/CURRENT.md`](ve/CURRENT.md)、[`ve/SETUP.md`](ve/SETUP.md)。
+
+注册音频上线前质检（不读取 CMD 或正负标签）：见
+[`ve/ENROLL_QUALITY.md`](ve/ENROLL_QUALITY.md)，入口为
+`ve/run_enroll_quality.sh`。

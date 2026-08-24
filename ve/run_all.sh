@@ -69,11 +69,18 @@ Presence 门控
                       FORCE_CALIB=1 或 CMD_WINDOWS≠off 时自动关闭
   EXTRA_REJECT        1=ASR 后叠话长句加拒并写 result.json（默认 1）
   TARGET_FRR          校准辅助目标；默认 0.02
+  TARGET_FAR          CALIB_SELECT=far 的开发集目标 FAR；默认 0.05
+  CALIB_SELECT        contest（现状）|frr|far；安全门实验推荐 far
   HOLDOUT_FRAC        >0 时仅在 calib 子集选 thr，并报 holdout contest
                       （建议 0.3；默认 0=同集扫 thr，易乐观）
   CMD_WINDOWS         off|slide|energy  CMD 滑窗打分（默认 off）
                       开了必须 FORCE_CALIB=1（分数几何变了）
                       默认 ASR 裁 argmax 窗；ASR_CROP=0 则整段 mix ASR（T2b）
+  STREAM_POLICY       max（现状）|mix|strict_rescue
+                      strict_rescue=mix 主判，分离流须过更高门槛且具有流间优势才救援
+  RESCUE_HIGH_MARGIN  strict_rescue 的分离高门槛增量（默认 0.08）
+  RESCUE_FLOOR_MARGIN mix 安全底线相对主阈值的下探量（默认 0.10）
+  RESCUE_DOMINANCE    top_sep-second_sep 最小间隔（默认 0.05）
   VETO_CAMP=1         灰区 camp 否决（只加拒）
   VETO_WINDOWS=1      灰区次优窗否决
   ASR_LANGUAGE        强制 Qwen3 language（如 Chinese）；空=自动
@@ -207,6 +214,8 @@ STRICT_ENROLL="${STRICT_ENROLL:-1}"
 STRICT_EVAL="${STRICT_EVAL:-1}"
 ASR_RESUME="${ASR_RESUME:-0}"
 TARGET_FRR="${TARGET_FRR:-0.02}"
+TARGET_FAR="${TARGET_FAR:-0.05}"
+CALIB_SELECT="${CALIB_SELECT:-contest}"
 PRESENCE_BACKEND="${PRESENCE_BACKEND:-eres2netv2}"
 # 最新最佳拒识：Presence 用一次分离 + 语言分 thr；默认 raw（不开 AS-Norm）
 USE_SEP="${USE_SEP:-1}"
@@ -225,6 +234,10 @@ fi
 LOCKED_THR="${LOCKED_THR:-1}"
 EXTRA_REJECT="${EXTRA_REJECT:-1}"
 CMD_WINDOWS="${CMD_WINDOWS:-off}"
+STREAM_POLICY="${STREAM_POLICY:-max}"
+RESCUE_HIGH_MARGIN="${RESCUE_HIGH_MARGIN:-0.08}"
+RESCUE_FLOOR_MARGIN="${RESCUE_FLOOR_MARGIN:-0.10}"
+RESCUE_DOMINANCE="${RESCUE_DOMINANCE:-0.05}"
 ASR_CROP="${ASR_CROP:-1}"
 case "$(echo "$CMD_WINDOWS" | tr '[:upper:]' '[:lower:]')" in
   1|true|on|yes|slide) CMD_WINDOWS=slide; WIN_TAG=win ;;
@@ -236,6 +249,13 @@ if [[ "${FORCE_CALIB:-0}" == "1" || "$CMD_WINDOWS" != "off" ]]; then
     echo "[INFO] FORCE_CALIB/CMD_WINDOWS → LOCKED_THR=0（实验臂，不用提交冻结 τ）"
   fi
   LOCKED_THR=0
+fi
+if [[ "$STREAM_POLICY" != "max" && "$LOCKED_THR" == "1" ]]; then
+  echo "[INFO] STREAM_POLICY=$STREAM_POLICY 与 max-3 冻结阈值不兼容 → LOCKED_THR=0"
+  LOCKED_THR=0
+fi
+if [[ "$STREAM_POLICY" == "strict_rescue" && "${ASNORM:-0}" == "1" ]]; then
+  echo "[ERR] strict_rescue 有效分数暂不支持 ASNORM"; exit 1
 fi
 if [[ "$LOCKED_THR" == "1" ]]; then
   if [[ "$ENROLL_VAD" == "1" ]]; then
@@ -256,6 +276,7 @@ VETO_WINDOWS="${VETO_WINDOWS:-0}"
 
 if [[ -z "${VE_OUT:-}" || "${VE_OUT}" == "/root/autodl-tmp/ve" ]]; then
   VE_OUT="/root/autodl-tmp/ve_${PIPELINE}_${VAD_TAG}"
+  [[ "$STREAM_POLICY" != "max" ]] && VE_OUT="${VE_OUT}_${STREAM_POLICY}"
   if [[ "$WIN_TAG" != "nowin" ]]; then
     VE_OUT="${VE_OUT}_${WIN_TAG}"
     [[ "$ASR_CROP" == "0" ]] && VE_OUT="${VE_OUT}_fullasr"
@@ -266,6 +287,16 @@ export VE_OUT
 # 共享校准目录（多 PIPELINE 对照时只校准一次）；按 backend/sep/lang/vad/norm/win 分桶
 CALIB_ROOT="${CALIB_ROOT:-/root/autodl-tmp/ve_presence_best}"
 CALIB_STEM="presence_calib_${PRESENCE_BACKEND}_${SEP_TAG}_${LS_TAG}_${VAD_TAG}_${SCORE_NORM_TAG}"
+if [[ "$STREAM_POLICY" == "mix" ]]; then
+  CALIB_STEM="${CALIB_STEM}_mix_policy"
+elif [[ "$STREAM_POLICY" == "strict_rescue" ]]; then
+  CALIB_STEM="${CALIB_STEM}_strict_h${RESCUE_HIGH_MARGIN}_f${RESCUE_FLOOR_MARGIN}_d${RESCUE_DOMINANCE}"
+fi
+if [[ "$CALIB_SELECT" == "far" ]]; then
+  CALIB_STEM="${CALIB_STEM}_selfar${TARGET_FAR}"
+elif [[ "$CALIB_SELECT" == "frr" ]]; then
+  CALIB_STEM="${CALIB_STEM}_selfrr${TARGET_FRR}"
+fi
 if [[ "$WIN_TAG" != "nowin" ]]; then
   CALIB_STEM="${CALIB_STEM}_${WIN_TAG}"
 fi
@@ -289,7 +320,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
-echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
+echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP STREAM_POLICY=$STREAM_POLICY LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=${BEST_SEP_DIR:-"(auto scan)"} DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
@@ -388,7 +419,12 @@ else
     --presence-backend "$PRESENCE_BACKEND"
     --device "$DEVICE"
     --target-frr "$TARGET_FRR"
-    --select-by contest
+    --target-far "$TARGET_FAR"
+    --select-by "$CALIB_SELECT"
+    --stream-policy "$STREAM_POLICY"
+    --rescue-high-margin "$RESCUE_HIGH_MARGIN"
+    --rescue-floor-margin "$RESCUE_FLOOR_MARGIN"
+    --rescue-dominance "$RESCUE_DOMINANCE"
   )
   [[ "$USE_SEP" == "1" ]] && CAL_ARGS+=(--use-sep --sep-depth 1)
   [[ "$LANG_SPLIT" == "1" ]] && CAL_ARGS+=(--lang-split)
@@ -429,6 +465,10 @@ EXT_ARGS=(
   --device "$DEVICE"
   --tse-backend "$TSE_BACKEND"
   --no-score-norm
+  --stream-policy "$STREAM_POLICY"
+  --rescue-high-margin "$RESCUE_HIGH_MARGIN"
+  --rescue-floor-margin "$RESCUE_FLOOR_MARGIN"
+  --rescue-dominance "$RESCUE_DOMINANCE"
 )
 [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
 [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)
@@ -445,6 +485,10 @@ if [[ "${ASNORM:-0}" == "1" ]]; then
     --device "$DEVICE"
     --tse-backend "$TSE_BACKEND"
     --asnorm --cohort-dir "$COHORT_DIR" --test-cohort-dir "$TEST_COHORT_DIR"
+    --stream-policy "$STREAM_POLICY"
+    --rescue-high-margin "$RESCUE_HIGH_MARGIN"
+    --rescue-floor-margin "$RESCUE_FLOOR_MARGIN"
+    --rescue-dominance "$RESCUE_DOMINANCE"
   )
   [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
   [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PresenceGate：仅判断「enroll 说话人是否出现在 CMD」。
 
-raw = max_k sim(enroll, stream_k)
+raw 默认 = max_k sim(enroll, stream_k)；也支持 mix-only / strict-rescue。
 可选 ScoreNormalizer：
   enroll_znorm / test_znorm / asnorm = 0.5*(z_A+z_B)
 reject iff score < thr
@@ -53,6 +53,8 @@ class PresenceResult:
     veto_backend: str | None = None
     sep_failed: bool = False
     sep_error: str | None = None
+    stream_policy: str = "max"
+    rescue_eligible: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -69,6 +71,8 @@ class PresenceResult:
             "score_norm": self.score_norm,
             "cmd_window_mode": self.cmd_window_mode,
             "n_windows": int(self.n_windows),
+            "stream_policy": self.stream_policy,
+            "rescue_eligible": bool(self.rescue_eligible),
         }
         if self.best_window is not None:
             d["best_window"] = self.best_window
@@ -161,6 +165,10 @@ class PresenceGate:
         veto_margin: float = 0.12,
         veto_gray: float = 0.10,
         veto_windows: bool = False,
+        stream_policy: str = "max",
+        rescue_high_margin: float = 0.08,
+        rescue_floor_margin: float = 0.10,
+        rescue_dominance: float = 0.05,
     ):
         self.encoder = encoder
         self.thr = float(thr)
@@ -192,6 +200,16 @@ class PresenceGate:
         self.veto_margin = float(veto_margin)
         self.veto_gray = float(veto_gray)
         self.veto_windows = bool(veto_windows)
+        self.stream_policy = str(stream_policy or "max").strip().lower()
+        if self.stream_policy not in {"max", "mix", "strict_rescue"}:
+            raise ValueError("stream_policy must be max | mix | strict_rescue")
+        if self.stream_policy != "max" and self.cmd_window_mode != "off":
+            raise ValueError("mix/strict_rescue 暂不与 CMD 滑窗取最大组合")
+        if self.stream_policy == "strict_rescue" and score_normalizer is not None:
+            raise ValueError("strict_rescue 的有效分数暂不支持 score normalization")
+        self.rescue_high_margin = float(rescue_high_margin)
+        self.rescue_floor_margin = float(rescue_floor_margin)
+        self.rescue_dominance = float(rescue_dominance)
         self._enroll_cache: dict[str, np.ndarray] = {}
         self._enroll_vad_meta: dict[str, dict] = {}
         self._veto_enroll_cache: dict[str, np.ndarray] = {}
@@ -349,10 +367,32 @@ class PresenceGate:
         sim_mix = float(sims.get("mix", 0.0))
         best_stream = "mix"
         best = sim_mix
-        for name, s in sims.items():
-            if s > best:
-                best = s
-                best_stream = name
+        rescue_eligible = False
+        sep_ranked = sorted(
+            ((name, score) for name, score in sims.items() if name != "mix"),
+            key=lambda pair: pair[1],
+            reverse=True,
+        )
+        if self.stream_policy == "max":
+            for name, s in sims.items():
+                if s > best:
+                    best = s
+                    best_stream = name
+        elif self.stream_policy == "strict_rescue" and sep_ranked:
+            top_name, top_score = sep_ranked[0]
+            second_score = sep_ranked[1][1] if len(sep_ranked) > 1 else -1.0
+            dominance = float(top_score - second_score)
+            if dominance >= self.rescue_dominance:
+                # For any swept threshold t, effective>=t is exactly:
+                # mix>=t OR (top>=t+high AND mix>=t-floor AND dominance>=d).
+                rescue_cap = min(
+                    float(top_score) - self.rescue_high_margin,
+                    sim_mix + self.rescue_floor_margin,
+                )
+                if rescue_cap > best:
+                    best = rescue_cap
+                    best_stream = top_name
+                    rescue_eligible = True
 
         best_window: dict | None = None
         second_window: dict | None = None
@@ -497,6 +537,8 @@ class PresenceGate:
             veto_backend=veto_backend,
             sep_failed=bool(self._sep_failed),
             sep_error=self._last_sep_error,
+            stream_policy=self.stream_policy,
+            rescue_eligible=rescue_eligible,
         )
         return pr, streams, e
 

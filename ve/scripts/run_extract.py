@@ -160,6 +160,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hop-sec", type=float, default=0.4)
     p.add_argument("--win-pad-ms", type=float, default=80.0)
     p.add_argument(
+        "--stream-policy",
+        default="max",
+        choices=("max", "mix", "strict_rescue"),
+        help="Presence 流融合：当前 max、仅 mix、或 mix 主判+严格分离救援",
+    )
+    p.add_argument("--rescue-high-margin", type=float, default=0.08)
+    p.add_argument("--rescue-floor-margin", type=float, default=0.10)
+    p.add_argument("--rescue-dominance", type=float, default=0.05)
+    p.add_argument(
         "--asr-crop",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -267,6 +276,31 @@ def main() -> int:
         thr_meta, enroll_vad=bool(args.enroll_vad), strict=True
     ):
         print(f"[WARN] {w}", flush=True)
+    if thr_meta:
+        calibrated_policy = str(thr_meta.get("stream_policy") or "max")
+        if calibrated_policy != str(args.stream_policy):
+            raise SystemExit(
+                f"[ERR] thr.stream_policy={calibrated_policy} 与当前 "
+                f"stream_policy={args.stream_policy} 不一致；禁止串用阈值"
+            )
+        calibrated_sep = bool(thr_meta.get("use_sep", False))
+        if calibrated_sep != bool(use_sep):
+            raise SystemExit(
+                f"[ERR] thr.use_sep={calibrated_sep} 与当前 use_sep={use_sep} 不一致；"
+                "禁止串用阈值"
+            )
+        if calibrated_policy == "strict_rescue":
+            for key, runtime in (
+                ("rescue_high_margin", args.rescue_high_margin),
+                ("rescue_floor_margin", args.rescue_floor_margin),
+                ("rescue_dominance", args.rescue_dominance),
+            ):
+                calibrated = float(thr_meta.get(key, runtime))
+                if abs(calibrated - float(runtime)) > 1e-9:
+                    raise SystemExit(
+                        f"[ERR] thr.{key}={calibrated} 与当前 {key}={runtime} 不一致；"
+                        "禁止串用阈值"
+                    )
     print(f"[INFO] VE_OUT={ve_out}")
     print(
         f"[INFO] samples={len(samples)} thr_default={thr_default} thr_mode={thr_mode} "
@@ -348,11 +382,16 @@ def main() -> int:
         veto_margin=float(args.veto_margin),
         veto_gray=float(args.veto_gray),
         veto_windows=bool(args.veto_windows),
+        stream_policy=str(args.stream_policy),
+        rescue_high_margin=float(args.rescue_high_margin),
+        rescue_floor_margin=float(args.rescue_floor_margin),
+        rescue_dominance=float(args.rescue_dominance),
     )
     actual_depth = gate.sep_depth
     print(
         f"[INFO] enroll_vad={gate.enroll_vad} max_sec={gate.enroll_vad_max_sec} "
-        f"cmd_windows={gate.cmd_window_mode} veto_windows={gate.veto_windows}",
+        f"cmd_windows={gate.cmd_window_mode} veto_windows={gate.veto_windows} "
+        f"stream_policy={gate.stream_policy}",
         flush=True,
     )
 
@@ -549,6 +588,10 @@ def main() -> int:
             "sep_depth": actual_depth,
             "save_sep_wavs": bool(sep_root),
             "score_norm": want_mode,
+            "stream_policy": gate.stream_policy,
+            "rescue_high_margin": gate.rescue_high_margin,
+            "rescue_floor_margin": gate.rescue_floor_margin,
+            "rescue_dominance": gate.rescue_dominance,
             "tse_backend": None if extractor is None else extractor.name,
             "pipeline": backend,
             "elapsed_sec": round(time.time() - t_run0, 2),

@@ -82,6 +82,7 @@ def sweep_thresholds(
     scores: list[tuple[str, float]],
     *,
     target_frr: float = 0.02,
+    target_far: float = 0.05,
     select_by: str = "contest",
 ) -> dict[str, Any]:
     def _lab(lab: object) -> str | None:
@@ -131,7 +132,7 @@ def sweep_thresholds(
     select_by = (select_by or "contest").lower()
     if select_by == "contest":
         chosen = max(curve, key=lambda m: (m["contest_score"], m["thr"]))
-    else:
+    elif select_by == "frr":
         feasible = [m for m in curve if m["frr"] <= target_frr + 1e-12]
         if feasible:
             chosen = min(feasible, key=lambda m: (m["far"], -m["thr"]))
@@ -139,6 +140,14 @@ def sweep_thresholds(
             min_frr = min(m["frr"] for m in curve)
             feasible = [m for m in curve if abs(m["frr"] - min_frr) < 1e-9]
             chosen = min(feasible, key=lambda m: (m["far"], -m["thr"]))
+    else:
+        feasible = [m for m in curve if m["far"] <= target_far + 1e-12]
+        if feasible:
+            chosen = min(feasible, key=lambda m: (m["frr"], m["far"], -m["thr"]))
+        else:
+            min_far = min(m["far"] for m in curve)
+            feasible = [m for m in curve if abs(m["far"] - min_far) < 1e-9]
+            chosen = min(feasible, key=lambda m: (m["frr"], -m["thr"]))
 
     eer = None
     best_gap = 1e9
@@ -152,6 +161,7 @@ def sweep_thresholds(
         "n_present": n_p,
         "n_absent": n_a,
         "target_frr": target_frr,
+        "target_far": target_far,
         "select_by": select_by,
         "metric": "0.5*RR + 0.5*(1-CER); CER=1 if present mis-rejected else 0 (presence-only)",
         "recommended": chosen,
@@ -189,8 +199,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--select-by",
         default="contest",
-        choices=("contest", "frr"),
+        choices=("contest", "frr", "far"),
     )
+    p.add_argument("--target-far", type=float, default=0.05)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--thr", type=float, default=0.0, help="仅打分用，校准本身扫 thr")
     p.add_argument(
@@ -244,6 +255,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--win-sec", type=float, default=0.8)
     p.add_argument("--hop-sec", type=float, default=0.4)
     p.add_argument("--win-pad-ms", type=float, default=80.0)
+    p.add_argument(
+        "--stream-policy",
+        default="max",
+        choices=("max", "mix", "strict_rescue"),
+    )
+    p.add_argument("--rescue-high-margin", type=float, default=0.08)
+    p.add_argument("--rescue-floor-margin", type=float, default=0.10)
+    p.add_argument("--rescue-dominance", type=float, default=0.05)
     return p.parse_args()
 
 
@@ -331,11 +350,15 @@ def main() -> int:
         win_sec=float(getattr(args, "win_sec", 0.8)),
         hop_sec=float(getattr(args, "hop_sec", 0.4)),
         win_pad_ms=float(getattr(args, "win_pad_ms", 80.0)),
+        stream_policy=str(args.stream_policy),
+        rescue_high_margin=float(args.rescue_high_margin),
+        rescue_floor_margin=float(args.rescue_floor_margin),
+        rescue_dominance=float(args.rescue_dominance),
     )
     actual_depth = gate.sep_depth
     print(
         f"[INFO] enroll_vad={gate.enroll_vad} max_sec={gate.enroll_vad_max_sec} "
-        f"cmd_windows={gate.cmd_window_mode}",
+        f"cmd_windows={gate.cmd_window_mode} stream_policy={gate.stream_policy}",
         flush=True,
     )
 
@@ -427,11 +450,17 @@ def main() -> int:
         for r in calib_detail
     ]
     cal = sweep_thresholds(
-        scored_calib, target_frr=args.target_frr, select_by=args.select_by
+        scored_calib,
+        target_frr=args.target_frr,
+        target_far=args.target_far,
+        select_by=args.select_by,
     )
     # 全量扫 thr 仅作对照（不写入 recommended，避免同集乐观偏差被当部署值）
     cal_full = sweep_thresholds(
-        scored, target_frr=args.target_frr, select_by=args.select_by
+        scored,
+        target_frr=args.target_frr,
+        target_far=args.target_far,
+        select_by=args.select_by,
     )
     cal["presence_backend"] = enc.name
     cal["use_sep"] = actual_depth >= 1
@@ -439,6 +468,10 @@ def main() -> int:
     cal["save_sep_wavs"] = bool(sep_root)
     cal["sep_wav_dir"] = str(sep_root) if sep_root else None
     cal["score_norm"] = norm_mode
+    cal["stream_policy"] = gate.stream_policy
+    cal["rescue_high_margin"] = float(args.rescue_high_margin)
+    cal["rescue_floor_margin"] = float(args.rescue_floor_margin)
+    cal["rescue_dominance"] = float(args.rescue_dominance)
     cal["enroll_vad"] = bool(args.enroll_vad)
     cal["enroll_vad_max_sec"] = float(args.enroll_vad_max_sec)
     cal["holdout_frac"] = holdout_frac
@@ -472,11 +505,16 @@ def main() -> int:
         "contest_score": rec["contest_score"],
         "neg_reject_rate": rec["neg_reject_rate"],
         "target_frr": args.target_frr,
+        "target_far": args.target_far,
         "select_by": args.select_by,
         "backend": enc.name,
         "use_sep": cal["use_sep"],
         "sep_depth": actual_depth,
         "score_norm": cal["score_norm"],
+        "stream_policy": gate.stream_policy,
+        "rescue_high_margin": float(args.rescue_high_margin),
+        "rescue_floor_margin": float(args.rescue_floor_margin),
+        "rescue_dominance": float(args.rescue_dominance),
         "enroll_vad": bool(args.enroll_vad),
         "enroll_vad_max_sec": float(args.enroll_vad_max_sec),
         "thr_mode": "global",
@@ -536,6 +574,7 @@ def main() -> int:
             samples=samples,
             sweep_fn=sweep_thresholds,
             target_frr=args.target_frr,
+            target_far=args.target_far,
             select_by=args.select_by,
         )
         cal["lang_split"] = ls

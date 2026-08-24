@@ -148,6 +148,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "reject_reasons": dict(Counter(r.get("reject_reason") for r in reject)),
         "non_absent_reject_uids": bad_reasons[:50],
         "n_non_absent_reject": len(bad_reasons),
+        "n_rescue_eligible": sum(bool(r.get("rescue_eligible")) for r in rows),
+        "n_rescue_accept": sum(
+            bool(r.get("rescue_eligible")) and r.get("decision") == "accept"
+            for r in rows
+        ),
     }
     return out
 

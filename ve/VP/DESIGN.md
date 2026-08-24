@@ -118,3 +118,42 @@ VE 侧 accept 后默认仍走 **mix ASR**，与 VP 的 streams 解耦：Presence
 - 未做 V1 就上融合或换 TSE
 - 把 KWS 文本 CER 选轨搬到 CMD
 - 默认打开 VAD / sep_multi / 三编码器投票
+
+## 7. `max` 风险与受控救援实验
+
+`max(mix, spk1, spk2)` 是多重尝试，会扩大负样本分数右尾；即使每一路的 FAR 可接受，取最大后的样本级 FAR 也可能不可接受。阈值必须按固定分路数和同一策略校准，禁止把 `max` 的阈值直接给 `mix` 或救援策略复用。
+
+现有实验开关：
+
+| `STREAM_POLICY` | 有效分数 |
+|---|---|
+| `max` | `max(mix, sep1, sep2)`，旧行为 |
+| `mix` | 只用 `mix` |
+| `strict_rescue` | mix 主判；分离 top 须过更高门槛、mix 不得低于安全底线、且 top 与 second 有足够间隔 |
+
+`strict_rescue` 的有效分数经过等价变换，因此现有单阈值 holdout 扫描和推理使用同一条判定边界：
+
+```text
+effective = max(mix, min(top_sep - high_margin, mix + floor_margin))
+            仅当 top_sep - second_sep >= dominance_margin
+```
+
+第一轮固定 margin，不扫网格：`high=0.08 / floor=0.10 / dominance=0.05`。分别用独立输出目录运行：
+
+```bash
+cd /root/extract-main/ve
+
+FORCE_CALIB=1 HOLDOUT_FRAC=0.3 HOLDOUT_SEED=0 CALIB_SELECT=far TARGET_FAR=0.05 \
+STREAM_POLICY=max USE_SEP=1 PIPELINE=mix SKIP_ASR=1 EXTRA_REJECT=0 \
+VE_OUT=/root/autodl-tmp/vp_policy_max ./run_all.sh
+
+FORCE_CALIB=1 HOLDOUT_FRAC=0.3 HOLDOUT_SEED=0 CALIB_SELECT=far TARGET_FAR=0.05 \
+STREAM_POLICY=mix USE_SEP=0 PIPELINE=mix SKIP_ASR=1 EXTRA_REJECT=0 \
+VE_OUT=/root/autodl-tmp/vp_policy_mix ./run_all.sh
+
+FORCE_CALIB=1 HOLDOUT_FRAC=0.3 HOLDOUT_SEED=0 CALIB_SELECT=far TARGET_FAR=0.05 \
+STREAM_POLICY=strict_rescue USE_SEP=1 PIPELINE=mix SKIP_ASR=1 EXTRA_REJECT=0 \
+VE_OUT=/root/autodl-tmp/vp_policy_strict ./run_all.sh
+```
+
+先比较 holdout FAR/FRR，并用 seed `0/17/43` 复跑。安全门：`strict_rescue` 的 holdout FAR 不高于 `mix` 的置信区间上界，且 FRR 有稳定下降；否则部署使用 `mix`，不使用分离救援。过安全门后才跑同一 mix ASR 的真实 contest。

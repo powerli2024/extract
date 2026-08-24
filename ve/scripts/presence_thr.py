@@ -66,6 +66,7 @@ def build_lang_split_recommendation(
     sweep_fn,
     target_frr: float,
     select_by: str,
+    target_far: float = 0.05,
 ) -> dict[str, Any]:
     """对 detail（含 score）按语言分别扫 thr，并汇总池化 contest。
 
@@ -96,7 +97,12 @@ def build_lang_split_recommendation(
                 flush=True,
             )
             continue
-        cal = sweep_fn(scored, target_frr=target_frr, select_by=select_by)
+        cal = sweep_fn(
+            scored,
+            target_frr=target_frr,
+            target_far=target_far,
+            select_by=select_by,
+        )
         rec = cal["recommended"]
         by_lang[lang] = {
             "thr": rec["thr"],
