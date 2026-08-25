@@ -516,6 +516,14 @@ def main() -> int:
     if reuse_sep_root is not None and not (reuse_sep_root / "d1").is_dir():
         raise SystemExit(f"--reuse-sep-root 缺少 d1/: {reuse_sep_root}")
     reuse_stats: dict[str, int] = {"hit": 0, "miss": 0, "fresh": 0}
+    if reuse_sep_root is None:
+        print("[SEP_REUSE] enabled=0 (no --reuse-sep-root; will run separator)", flush=True)
+    else:
+        print(
+            f"[SEP_REUSE] enabled=1 root={reuse_sep_root} strict={bool(args.strict_reuse_sep)} "
+            "validation=mix_waveform_fingerprint",
+            flush=True,
+        )
 
     by_split: dict[str, list[dict[str, Any]]] = {s: [] for s in splits}
     t_run0 = time.time()
@@ -723,6 +731,7 @@ def main() -> int:
         },
     )
     coverage_root = reuse_sep_root if reuse_sep_root is not None else (ve_out / "sep_streams")
+    reuse_display: Any = reuse_stats if reuse_sep_root is not None else "disabled"
     if sep_root is not None or reuse_sep_root is not None:
         coverage = sep_cache_coverage(all_rows, coverage_root, actual_depth)
         coverage_path = ve_out / "reports" / "sep_streams_coverage.json"
@@ -731,7 +740,7 @@ def main() -> int:
         )
         print(
             f"[SEP_CACHE] root={coverage_root} groups={coverage['groups']} "
-            f"missing={coverage['missing_count']} reuse={reuse_stats} → {coverage_path}",
+            f"missing={coverage['missing_count']} reuse={reuse_display} → {coverage_path}",
             flush=True,
         )
         if args.strict_sep_wavs and coverage["missing_count"]:
