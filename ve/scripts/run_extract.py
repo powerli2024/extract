@@ -680,14 +680,15 @@ def main() -> int:
         n_done = i + 1
         if n_done % 500 == 0 or n_done == len(samples):
             msg = (
-                f"[INFO] {n_done}/{len(samples)} last={uid} "
+                f"last={uid} "
                 f"decision={rec.get('decision')} score={rec.get('presence_score')} "
                 f"thr={rec.get('presence_thr')}"
             )
             if tqdm is not None:
-                tqdm.write(msg)
+                # 保留 tqdm 的单行刷新，不再用 tqdm.write 把进度条打散为多行。
+                iterator.set_postfix_str(msg, refresh=False)
             else:
-                print(msg, flush=True)
+                print(f"[INFO] {n_done}/{len(samples)} {msg}", flush=True)
 
     all_rows: list[dict[str, Any]] = []
     for split, rows in by_split.items():

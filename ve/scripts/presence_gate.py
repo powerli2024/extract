@@ -366,12 +366,20 @@ class PresenceGate:
             self._last_sep_error = None
         sims: dict[str, float] = {}
         embs: dict[str, np.ndarray] = {}
-        for name, w in streams.items():
-            if name == "peak":
-                continue
-            if _rms(w) < self.min_stream_rms and name != "mix":
-                continue
-            emb = self.encoder.embed(w, sr)
+        candidates = [
+            (name, w) for name, w in streams.items()
+            if name != "peak" and (name == "mix" or _rms(w) >= self.min_stream_rms)
+        ]
+        embed_batch = getattr(self.encoder, "embed_batch", None)
+        if callable(embed_batch):
+            candidate_embs = embed_batch([w for _, w in candidates], sr)
+        else:  # 保持第三方/测试编码器只实现 embed() 时的兼容性。
+            candidate_embs = [self.encoder.embed(w, sr) for _, w in candidates]
+        if len(candidate_embs) != len(candidates):
+            raise RuntimeError(
+                f"PresenceEncoder embed_batch 返回数错误: {len(candidate_embs)} != {len(candidates)}"
+            )
+        for (name, _w), emb in zip(candidates, candidate_embs):
             embs[name] = emb
             sims[name] = cosine_sim(e, emb)
 

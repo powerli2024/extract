@@ -198,8 +198,18 @@ def main() -> int:
                 for name, w in enhanced48.items()
             }
 
-            raw_scores = {name: float(cosine_sim(enroll_emb, enc.embed(w, 16000))) for name, w in raw.items()}
-            se_scores = {name: float(cosine_sim(enroll_emb, enc.embed(w, 16000))) for name, w in enhanced.items()}
+            raw_embs = enc.embed_batch([raw[name] for name in STREAMS], 16000)
+            se_embs = enc.embed_batch([enhanced[name] for name in STREAMS], 16000)
+            if len(raw_embs) != len(STREAMS) or len(se_embs) != len(STREAMS):
+                raise RuntimeError("PresenceEncoder embed_batch 未返回完整三流 embedding")
+            raw_scores = {
+                name: float(cosine_sim(enroll_emb, emb))
+                for name, emb in zip(STREAMS, raw_embs)
+            }
+            se_scores = {
+                name: float(cosine_sim(enroll_emb, emb))
+                for name, emb in zip(STREAMS, se_embs)
+            }
             raw_keep, se_keep = rank_sources(raw_scores)[:2], rank_sources(se_scores)[:2]
             exports: dict[str, list[dict[str, Any]]] = {"raw": [], "se48k": []}
             for condition, waves, selected in (("raw", raw, raw_keep), ("se48k", enhanced, se_keep)):
@@ -227,12 +237,13 @@ def main() -> int:
             elapsed = max(time.time() - t0, 1e-6)
             rate = idx / elapsed
             eta = (len(samples) - idx) / rate if rate else 0.0
-            print(
+            line = (
                 f"[CMD_SE] {idx}/{len(samples)} ({100.0 * idx / len(samples):5.1f}%) "
                 f"ok={n_ok} error={n_error} oom_retried={n_oom_retried} "
-                f"rate={rate:.2f} utt/s eta={eta / 60.0:.1f}m",
-                flush=True,
+                f"rate={rate:.2f} utt/s eta={eta / 60.0:.1f}m"
             )
+            # 终端单行刷新；末尾才换行，日志中则以 CR 保留同一进度状态。
+            print("\r" + line.ljust(140), end="\n" if idx == len(samples) else "", flush=True)
 
     with result_path.open("w", encoding="utf-8") as f:
         for rec in rows:

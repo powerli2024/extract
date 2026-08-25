@@ -187,6 +187,27 @@ class ERes2NetV2Encoder(PresenceEncoder):
             f"keys={list(last_out) if isinstance(last_out, dict) else None}"
         )
 
+    def embed_batch(self, wavs: list[np.ndarray], sr: int = 16000) -> list[np.ndarray]:
+        """优先让 ModelScope 一次编码同长度/短 CMD 的多条流；不支持时安全回退单条。"""
+        xs = [np.asarray(w, dtype=np.float32).reshape(-1) for w in wavs]
+        if not xs:
+            return []
+        calls = (
+            lambda: self._sv(xs, output_emb=True),
+            lambda: self._sv(xs, extract_emb=True),
+            lambda: self._sv([{"array": x, "sampling_rate": int(sr)} for x in xs], output_emb=True),
+            lambda: self._sv(xs),
+        )
+        for call in calls:
+            try:
+                out = call()
+                embs = self._parse_embs(out, len(xs))
+                if embs is not None:
+                    return embs
+            except Exception:
+                continue
+        return [self.embed(x, sr) for x in xs]
+
     @staticmethod
     def _parse_emb(out: Any) -> np.ndarray | None:
         if isinstance(out, dict):
@@ -203,6 +224,25 @@ class ERes2NetV2Encoder(PresenceEncoder):
             if arr.ndim == 2:
                 arr = arr[0]
             return arr.reshape(-1)
+        return None
+
+    @staticmethod
+    def _parse_embs(out: Any, n: int) -> list[np.ndarray] | None:
+        """只接受严格一一对应的 batch embedding，避免把验证分数误当嵌入。"""
+        if isinstance(out, dict):
+            for key in ("embs", "embedding", "spk_embedding", "emb"):
+                value = out.get(key)
+                if value is None:
+                    continue
+                arr = np.asarray(value, dtype=np.float32)
+                if arr.ndim == 2 and arr.shape[0] == n:
+                    return [arr[i].reshape(-1) for i in range(n)]
+                if n == 1 and arr.ndim in (1, 2):
+                    return [arr.reshape(-1) if arr.ndim == 1 else arr[0].reshape(-1)]
+        if isinstance(out, (list, tuple)) and len(out) == n:
+            parsed = [ERes2NetV2Encoder._parse_emb(x) for x in out]
+            if all(x is not None for x in parsed):
+                return [x for x in parsed if x is not None]
         return None
 
 
