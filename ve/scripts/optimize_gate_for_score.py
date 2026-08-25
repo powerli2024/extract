@@ -121,6 +121,7 @@ def optimize_thresholds(
     asr: dict[str, dict[str, Any]],
     *,
     policy: str,
+    threshold_mode: str = "lang_split",
     margins: tuple[float, float, float] = (0.08, 0.10, 0.05),
 ) -> dict[str, float]:
     """Optimize independent zh/en thresholds for the official additive score."""
@@ -138,10 +139,16 @@ def optimize_thresholds(
 
     high, floor, dominance = margins
     result: dict[str, float] = {}
-    for lang in ("zh", "en"):
+    if threshold_mode not in {"global", "lang_split"}:
+        raise ValueError(f"unknown threshold_mode={threshold_mode}")
+    groups: list[tuple[str, str | None]] = (
+        [("zh", "zh"), ("en", "en")] if threshold_mode == "lang_split"
+        else [("default", None)]
+    )
+    for out_key, lang in groups:
         events: list[tuple[float, float]] = []
         for row in rows:
-            if str(row.get("lang") or "zh") != lang:
+            if lang is not None and str(row.get("lang") or "zh") != lang:
                 continue
             score = stream_score(
                 row,
@@ -175,7 +182,10 @@ def optimize_thresholds(
                 abs(gain - best_gain) <= 1e-15 and score > best_thr
             ):
                 best_gain, best_thr = gain, score
-        result[lang] = float(best_thr)
+        result[out_key] = float(best_thr)
+    if threshold_mode == "global":
+        result["zh"] = result["default"]
+        result["en"] = result["default"]
     if "zh" not in result and result:
         result["zh"] = next(iter(result.values()))
     result["default"] = result.get("zh", next(iter(result.values())))
@@ -207,6 +217,7 @@ def _dist(values: list[float]) -> dict[str, float]:
     x = np.asarray(values, dtype=np.float64)
     return {
         "mean": float(np.mean(x)),
+        "std": float(np.std(x)),
         "p05": float(np.quantile(x, 0.05)),
         "p50": float(np.quantile(x, 0.50)),
         "p95": float(np.quantile(x, 0.95)),
@@ -219,12 +230,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--asr-all-pos", type=Path, required=True, help="所有正样本均已 ASR 的 asr_results.jsonl")
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--policies", default="max,strict_rescue,mix")
+    p.add_argument("--threshold-modes", default="global,lang_split")
     p.add_argument("--holdout-frac", type=float, default=0.30)
     p.add_argument("--seeds", type=int, default=100)
     p.add_argument("--rescue-high-margin", type=float, default=0.08)
     p.add_argument("--rescue-floor-margin", type=float, default=0.10)
     p.add_argument("--rescue-dominance", type=float, default=0.05)
     p.add_argument("--strict", action="store_true")
+    p.add_argument("--presence-backend", default="eres2netv2")
+    p.add_argument("--enroll-vad", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--enroll-vad-max-sec", type=float, default=4.0)
     p.add_argument(
         "--baseline-thr",
         type=Path,
@@ -279,6 +294,8 @@ def main() -> int:
         )
 
     policies = [x.strip() for x in args.policies.split(",") if x.strip()]
+    threshold_modes = [x.strip() for x in args.threshold_modes.split(",") if x.strip()]
+    configurations = [f"{policy}@{mode}" for policy in policies for mode in threshold_modes]
     baseline_thresholds = load_thresholds(args.baseline_thr.resolve()) if args.baseline_thr else None
     margins = (
         float(args.rescue_high_margin),
@@ -310,10 +327,15 @@ def main() -> int:
         },
     }
 
-    cv_rows: dict[str, list[dict[str, Any]]] = {p: [] for p in policies}
-    for policy in policies:
-        thresholds = optimize_thresholds(rows, asr, policy=policy, margins=margins)
-        report["full_data_diagnostic"][policy] = {
+    cv_rows: dict[str, list[dict[str, Any]]] = {c: [] for c in configurations}
+    for config in configurations:
+        policy, mode = config.split("@", 1)
+        thresholds = optimize_thresholds(
+            rows, asr, policy=policy, threshold_mode=mode, margins=margins
+        )
+        report["full_data_diagnostic"][config] = {
+            "policy": policy,
+            "threshold_mode": mode,
             "thresholds": thresholds,
             "metrics": evaluate(rows, asr, policy=policy, thresholds=thresholds, margins=margins),
             "warning": "in-sample optimum; do not deploy without holdout stability",
@@ -326,10 +348,13 @@ def main() -> int:
             if baseline_thresholds
             else None
         )
-        for policy in policies:
-            thresholds = optimize_thresholds(train, asr, policy=policy, margins=margins)
+        for config in configurations:
+            policy, mode = config.split("@", 1)
+            thresholds = optimize_thresholds(
+                train, asr, policy=policy, threshold_mode=mode, margins=margins
+            )
             metrics = evaluate(test, asr, policy=policy, thresholds=thresholds, margins=margins)
-            cv_rows[policy].append(
+            cv_rows[config].append(
                 {
                     **metrics,
                     "thr_zh": thresholds.get("zh"),
@@ -342,35 +367,58 @@ def main() -> int:
                 }
             )
 
-    for policy, vals in cv_rows.items():
-        report["holdout"][policy] = {
+    for config, vals in cv_rows.items():
+        policy, mode = config.split("@", 1)
+        report["holdout"][config] = {
+            "policy": policy,
+            "threshold_mode": mode,
+            "distributions": {
             key: _dist([float(v[key]) for v in vals])
             for key in (
                 "contest_score", "score_delta_vs_baseline", "rr",
                 "cer_pos_micro", "frr", "thr_zh", "thr_en",
             )
+            },
         }
-    best = max(
-        policies,
-        key=lambda p: report["holdout"][p]["contest_score"]["mean"],
+    # 先按保守尾部而非均值排名，避免从大量候选中挑到偶然高分臂。
+    stable_policies = [
+        p for p in configurations
+        if baseline_thresholds is None
+        or report["holdout"][p]["distributions"]["score_delta_vs_baseline"]["p05"] > 0.0
+    ]
+    ranked_policies = sorted(
+        stable_policies or configurations,
+        key=lambda p: (
+            report["holdout"][p]["distributions"]["contest_score"]["p05"],
+            report["holdout"][p]["distributions"]["contest_score"]["mean"],
+        ),
+        reverse=True,
     )
-    stable = (
-        baseline_thresholds is None
-        or report["holdout"][best]["score_delta_vs_baseline"]["p05"] > 0.0
-    )
+    best = ranked_policies[0]
+    stable = bool(stable_policies)
+    best_policy, best_mode = best.split("@", 1)
+    deploy_policy = best_policy if stable else "max"
+    deploy_mode = best_mode if stable else "lang_split"
+    if stable:
+        # 部署值取各训练折最优阈值的中位数，不再使用全量同集 oracle。
+        deploy_thresholds = {
+            lang: float(np.median([v[f"thr_{lang}"] for v in cv_rows[best]]))
+            for lang in ("zh", "en")
+        }
+        deploy_thresholds["default"] = deploy_thresholds["zh"]
+    else:
+        deploy_thresholds = baseline_thresholds
     report["recommendation"] = {
-        "policy": best if stable else "max_baseline",
-        "best_experimental_policy": best,
+        "policy": deploy_policy,
+        "threshold_mode": deploy_mode,
+        "best_experimental_configuration": best,
         "basis": (
-            "highest mean holdout score and p05 delta above baseline is positive"
+            "highest conservative holdout p05 among policies whose paired delta p05 is positive"
             if stable
             else "no stable gain: paired holdout score delta p05 is not positive"
         ),
-        "deploy_thresholds_candidate": (
-            report["full_data_diagnostic"][best]["thresholds"]
-            if stable
-            else baseline_thresholds
-        ),
+        "deploy_thresholds_candidate": deploy_thresholds,
+        "threshold_estimator": "median of repeated training-fold optima" if stable else "frozen baseline",
         "requires_independent_domain_validation": True,
     }
 
@@ -378,16 +426,42 @@ def main() -> int:
     (args.out_dir / "gate_score_optimization.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    if deploy_thresholds is None:
+        raise SystemExit("no deployable threshold: provide --baseline-thr or obtain a stable policy")
+    recommended_thr = {
+        "presence_thr": deploy_thresholds["default"],
+        "thr_mode": deploy_mode,
+        "thr_by_lang": deploy_thresholds,
+        "backend": args.presence_backend,
+        "use_sep": True,
+        "sep_depth": 1,
+        "score_norm": "raw",
+        "stream_policy": deploy_policy,
+        "rescue_high_margin": margins[0],
+        "rescue_floor_margin": margins[1],
+        "rescue_dominance": margins[2],
+        "enroll_vad": bool(args.enroll_vad),
+        "enroll_vad_max_sec": float(args.enroll_vad_max_sec),
+        "locked": False,
+        "source": "repeated_holdout_official_score",
+        "metric": report["metric"],
+        "holdout": report["holdout"][best],
+        "warning": "KWS-specific threshold; use only with the same enrollment set and stream policy.",
+    }
+    (args.out_dir / "recommended_thr.json").write_text(
+        json.dumps(recommended_thr, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     lines = [
         "# Presence optimization with real ASR CER",
         "",
         "| policy | score mean | score p05-p95 | delta vs baseline | RR | CER | FRR |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
-    for policy in policies:
-        h = report["holdout"][policy]
+    for config in configurations:
+        h = report["holdout"][config]["distributions"]
         lines.append(
-            f"| {policy} | {h['contest_score']['mean']:.6f} | "
+            f"| {config} | {h['contest_score']['mean']:.6f} | "
             f"{h['contest_score']['p05']:.6f}-{h['contest_score']['p95']:.6f} | "
             f"{h['score_delta_vs_baseline']['mean']:.6f} "
             f"[{h['score_delta_vs_baseline']['p05']:.6f},"

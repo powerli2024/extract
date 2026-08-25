@@ -8,10 +8,12 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from optimize_gate_for_score import (  # noqa: E402
+    _dist,
     evaluate,
     load_thresholds,
     optimize_thresholds,
     stream_score,
+    main,
 )
 
 
@@ -56,3 +58,42 @@ def test_load_locked_threshold_shape(tmp_path: Path) -> None:
     path = tmp_path / "thr.json"
     path.write_text('{"thr_by_lang":{"zh":0.2,"en":0.3}}', encoding="utf-8")
     assert load_thresholds(path) == {"zh": 0.2, "en": 0.3, "default": 0.2}
+
+
+def test_distribution_keeps_spread_for_stability_audit() -> None:
+    got = _dist([0.1, 0.2, 0.3])
+    assert got["p50"] == 0.2
+    assert got["std"] > 0.0
+
+
+def test_main_writes_runtime_threshold_for_global_and_lang_modes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import json
+
+    decisions = []
+    asr = []
+    for lang in ("zh", "en"):
+        for i in range(2):
+            uid = f"p_{lang}_{i}"
+            decisions.append(_row(uid, "pos", lang, 0.7 - i * .1, 0.65, 0.1) | {"cmd_text": "打开"})
+            asr.append({"uid": uid, "decision": "accept", "cmd_text": "打开", "status": "ok", "n": 2, "edit_distance": 0})
+            decisions.append(_row(f"n_{lang}_{i}", "neg", lang, 0.2 + i * .1, 0.25, 0.1) | {"cmd_text": ""})
+    dec_path = tmp_path / "dec.jsonl"
+    asr_path = tmp_path / "asr.jsonl"
+    base_path = tmp_path / "base.json"
+    out = tmp_path / "out"
+    dec_path.write_text("".join(json.dumps(x) + "\n" for x in decisions), encoding="utf-8")
+    asr_path.write_text("".join(json.dumps(x) + "\n" for x in asr), encoding="utf-8")
+    base_path.write_text(json.dumps({"thr_by_lang": {"zh": .5, "en": .5}}), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [
+        "optimize", "--decisions", str(dec_path), "--asr-all-pos", str(asr_path),
+        "--baseline-thr", str(base_path), "--out-dir", str(out),
+        "--policies", "max", "--threshold-modes", "global,lang_split",
+        "--holdout-frac", "0.5", "--seeds", "2", "--strict",
+    ])
+    assert main() == 0
+    threshold = json.loads((out / "recommended_thr.json").read_text(encoding="utf-8"))
+    assert threshold["thr_mode"] in {"global", "lang_split"}
+    assert threshold["stream_policy"] == "max"
+    assert set(threshold["thr_by_lang"]) == {"zh", "en", "default"}

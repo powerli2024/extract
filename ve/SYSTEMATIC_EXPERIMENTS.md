@@ -1,0 +1,46 @@
+# Systematic KWS / gate / extraction experiments
+
+目标口径只有一个：`score=(RR_neg + 1-CER_pos_micro)/2`。正样本被拒、提取失败或 ASR 最终失败时按该条 `CER=1`；宏平均 CER 只作诊断。
+
+未知测试集上不存在由 DatasetA 离线实验“保证绝对最高分”的方法。本流程通过固定 ASR、重复分层留出、保守尾部分数、严格 coverage 和最终配对 bootstrap，降低多臂搜索造成的过拟合。
+
+## 1. Gate screen: KWS × threshold policy
+
+先固定下游为原始 CMD mix。所有 KWS 候选共享一份全正样本 ASR，分别重算 `mix/d1_spk1/d1_spk2` 声纹分数；比较 `max`、`strict_rescue`、`mix`。部署阈值取重复训练折最优阈值的中位数，不取全量同集 oracle。
+
+```bash
+cd /root/extract-main/ve
+export KWS_CANDIDATES='mixed=/root/autodl-tmp/mixed_best/mixed_best;dae_se=/root/autodl-tmp/EXP02_DAE_THEN_MossFormer2_SE_48K;mmsfa=/root/autodl-tmp/mmsfa_dae_best_threshold/sep_3'
+export EXP_ROOT=/root/autodl-tmp/ve_systematic_v1
+export SEP_REUSE_ROOT=/root/autodl-tmp/ve_sep_cache/sep_streams
+export STRICT_SEP_REUSE=1
+SEEDS=200 HOLDOUT_FRAC=0.30 THRESHOLD_MODES=global,lang_split TOP_K=3 ./run_systematic_gate_screen.sh
+```
+
+查看 `ranking/gate_ranking.md`。只有 coverage 完整且相对冻结基线的配对分差 `p05>0` 才入围；若没有入围项，保留仓库 `locked_thr.json`。
+
+## 2. Full finalists: KWS/gate × downstream arm
+
+最多带 2--3 个第一阶段组合进入完整 ASR。每个条目格式为 `name|KWS目录|gate_score_opt目录|policy`。脚本会对每个下游臂强制处理全部正样本，再用该臂的真实 ASR 字符错误重新选择 `global/lang_split` 阈值；不会把 mix 最优阈值直接套给所有 TSE。
+
+```bash
+export FINALISTS='mixed_max|/root/autodl-tmp/mixed_best/mixed_best|/root/autodl-tmp/ve_systematic_v1/gate/mixed/reports/gate_score_opt|max;dae_rescue|/root/autodl-tmp/EXP02_DAE_THEN_MossFormer2_SE_48K|/root/autodl-tmp/ve_systematic_v1/gate/dae_se/reports/gate_score_opt|strict_rescue'
+export PIPELINES='mix,sep_route,adaptive_route,wesep,ps4,cond_tasnet'
+export EXP_ROOT=/root/autodl-tmp/ve_systematic_v1
+BASELINE_PIPELINE=sep_route BOOTSTRAP_REPLICATES=5000 ./run_systematic_finalists.sh
+```
+
+第一个 finalist 的 `BASELINE_PIPELINE` 会额外用仓库冻结 `locked_thr.json` 生成真实基线，并作为 bootstrap 的第一项。正式候选必须满足：全量、all-positive ASR 全部 `ok`、`ASR_RESUME=0`、final coverage errors 为 0。最终先看实际官方分，再要求相对冻结基线的配对 bootstrap 分差 `p05>0`；同时检查中英文切片。若最高分臂没有稳定增益，选择基线或结构更简单、延迟更低的臂。确认赢家后，再用其 `gate_opt/recommended_thr.json` 做一次标准 `run_all.sh` 全链路复核与延迟测试。
+
+## 3. Controlled ablations
+
+- `CMD_SE=1` 目前只生成 raw/SE48K 的声纹排序对照，不替换正式 ASR 输入，不能仅凭该开关声称分数提升。应把候选音频接入独立 ASR/decision overlay 后再严格计分。
+- `EXTRA_REJECT=0` 是主线。额外拒识只有在同一严格评测中提高官方分且 bootstrap 稳定时才开启。
+- AS-Norm、窗口最大值、VAD 与新编码器会改变分数尺度，必须各自重新优化阈值，禁止复用其他臂的阈值。
+- Wesep/PS4/Cond-TasNet 先用小规模冒烟验证依赖和输出，再跑全量；冒烟分数不进入排名。
+
+## 4. Hidden-test safeguards
+
+- 保留至少一个未参与日常调参的同分布批次作一次性验收；若已经反复查看 DatasetA 全量结果，DatasetA 不能再视为真正盲测集。
+- 记录数据版本、KWS 根目录、模型权重哈希、阈值文件和代码提交；测试集上不再重新标定阈值。
+- 优先选择跨 seed 阈值范围窄、中英文都不退化、依赖失败可回退的方案，而不是只领先万分位但方差很大的方案。
