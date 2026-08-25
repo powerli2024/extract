@@ -62,6 +62,7 @@ Presence 门控
   PRESENCE_BACKEND    eres2netv2（默认）| campplus | resnet34_lm | …
   USE_SEP             1=Presence 用一次分离 max-cosine（默认 1）
                       sep_route 强制为 1
+  SAVE_SEP_WAVS       1=保存 mix 与 MossFormer 中间分离轨到 sep_streams/d1/（默认 0；占用磁盘）
   LANG_SPLIT          1=按 zh/en 分 thr（默认 1）
   ENROLL_VAD          1=enroll 能量 VAD；0=关闭。提交默认 0（LOCKED_THR=1 会强制 0）
                       → VE_OUT / 校准目录带 _vad 或 _novad，结果可并存
@@ -233,6 +234,7 @@ fi
 # 提交默认：冻结 τ + 叠话加拒。实验臂 FORCE_CALIB / 滑窗会关掉锁定 τ。
 LOCKED_THR="${LOCKED_THR:-1}"
 EXTRA_REJECT="${EXTRA_REJECT:-1}"
+SAVE_SEP_WAVS="${SAVE_SEP_WAVS:-0}"
 CMD_WINDOWS="${CMD_WINDOWS:-off}"
 STREAM_POLICY="${STREAM_POLICY:-max}"
 RESCUE_HIGH_MARGIN="${RESCUE_HIGH_MARGIN:-0.08}"
@@ -320,7 +322,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
-echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP STREAM_POLICY=$STREAM_POLICY LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
+echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP SAVE_SEP_WAVS=$SAVE_SEP_WAVS STREAM_POLICY=$STREAM_POLICY LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=${BEST_SEP_DIR:-"(auto scan)"} DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
@@ -471,6 +473,7 @@ EXT_ARGS=(
   --rescue-dominance "$RESCUE_DOMINANCE"
 )
 [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
+[[ "$SAVE_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--save-sep-wavs)
 [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)
 [[ "$LIMIT" != "0" ]] && EXT_ARGS+=(--limit "$LIMIT")
 [[ -n "${WESEP_MODEL_DIR:-}" ]] && EXT_ARGS+=(--wesep-model-dir "$WESEP_MODEL_DIR")
@@ -491,6 +494,7 @@ if [[ "${ASNORM:-0}" == "1" ]]; then
     --rescue-dominance "$RESCUE_DOMINANCE"
   )
   [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
+  [[ "$SAVE_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--save-sep-wavs)
   [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)
   [[ "$LIMIT" != "0" ]] && EXT_ARGS+=(--limit "$LIMIT")
   [[ -n "${WESEP_MODEL_DIR:-}" ]] && EXT_ARGS+=(--wesep-model-dir "$WESEP_MODEL_DIR")
