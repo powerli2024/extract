@@ -170,6 +170,10 @@ def main() -> int:
     print(f"POS  FRR={frr:.6f}  false_reject={n_rej_pos}/{n_pos}  CER={cer_micro:.6f} ({errors}/{chars})")
     print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score']:.6f}")
     print(f"COVERAGE errors={len(coverage_errors)} duplicate_decisions={duplicate_dec} duplicate_asr={duplicate_asr}")
+    if coverage_errors:
+        preview = ", ".join(coverage_errors[:20])
+        suffix = " ..." if len(coverage_errors) > 20 else ""
+        print(f"COVERAGE detail: {preview}{suffix}")
     print(f"[OK] summary → {out_dir / 'summary.json'}")
     if args.strict and (coverage_errors or duplicate_dec or duplicate_asr):
         print("[ERR] strict final evaluation coverage failed", file=sys.stderr)

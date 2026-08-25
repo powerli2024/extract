@@ -341,6 +341,8 @@ class PresenceGate:
         sr: int = 16000,
         thr: float | None = None,
         save_dir: Path | None = None,
+        precomputed_streams: dict[str, np.ndarray] | None = None,
+        precomputed_sep_dir: Path | None = None,
     ) -> tuple[PresenceResult, dict[str, np.ndarray], np.ndarray]:
         """返回 (PresenceResult, streams, enroll_emb)。"""
         thr = self.thr if thr is None else float(thr)
@@ -352,7 +354,16 @@ class PresenceGate:
             cropped, enroll_vad_meta = self.prepare_enroll(enroll_wav, sr)
             e = self.encoder.embed(cropped, sr)
 
-        streams = self._sep_streams(cmd_wav, sr)
+        if precomputed_streams is None:
+            streams = self._sep_streams(cmd_wav, sr)
+        else:
+            # 调用方已用 mix 波形指纹验证；分离与 KWS 无关，可安全跳过。
+            streams = {
+                str(k): np.asarray(v, dtype=np.float32).reshape(-1)
+                for k, v in precomputed_streams.items()
+            }
+            self._sep_failed = False
+            self._last_sep_error = None
         sims: dict[str, float] = {}
         embs: dict[str, np.ndarray] = {}
         for name, w in streams.items():
@@ -504,7 +515,7 @@ class PresenceGate:
                 reject = True
                 reason = "window_veto"
 
-        sep_wav_dir = None
+        sep_wav_dir = str(Path(precomputed_sep_dir).resolve()) if precomputed_sep_dir else None
         if save_dir is not None:
             save_sep_streams(Path(save_dir), streams, sr=sr)
             sep_wav_dir = str(Path(save_dir).resolve())

@@ -29,6 +29,7 @@ pos 总 CER（竞赛口径）：误拒样本(decision=reject)记 CER=1，接受�
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -425,7 +426,8 @@ def _retry_mismatch(args: argparse.Namespace, sample: dict[str, Any],
                     ctx: Optional[str]) -> tuple[str, str]:
     from lift_common import DOMAIN_CONTEXT, duration_mismatch
 
-    if not getattr(args, "retry_mismatch", False):
+    # 严格覆盖也强制走回退链；空 hyp 不得直接流入 final_evaluate。
+    if not (getattr(args, "retry_mismatch", False) or getattr(args, "require_accepted_ok", False)):
         return hyp, rec.get("asr_pass") or "primary"
     if not duration_mismatch(hyp, rec.get("dur_sec")):
         return hyp, rec.get("asr_pass") or "primary"
@@ -791,6 +793,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--retry-mismatch", action="store_true",
                    help="hyp 与时长严重不匹配时二次解码（Chinese+领域），再不行回退 mix")
     p.add_argument(
+        "--require-accepted-ok", action="store_true",
+        help="严格 ASR：所有接受的正样本必须获得真实非空转写；失败 UID 自动单条重试，仍失败则返回非零",
+    )
+    p.add_argument(
+        "--accepted-ok-retries", type=int, default=2,
+        help="--require-accepted-ok 下每条失败接受样本的额外单条重试次数（默认 2）",
+    )
+    p.add_argument(
         "--only-uids",
         default="",
         help="只重跑逗号分隔的 pos UID；默认 resume 保留其余已有 ASR 记录",
@@ -930,6 +940,14 @@ def main() -> int:
                 if float(cur.get("presence_thr") or -1) != float(r.get("presence_thr") or -1):
                     # thr 变了但 decision 碰巧相同：仍可复用 CER（同 wav）；仅记录
                     pass
+            # 严格模式绝不复用旧的空转写/异常记录。
+            if (
+                getattr(args, "require_accepted_ok", False)
+                and cur_dec == "accept"
+                and r.get("status") != "ok"
+            ):
+                n_stale += 1
+                continue
             done[uid] = r
         if done:
             print(
@@ -1006,6 +1024,35 @@ def main() -> int:
     if pbar is not None:
         pbar.close()
 
+    # 批量推理偶发错误、空转写，均改为单条重跑。单条路径会强制 Chinese+领域
+    # 回退及原始 mix 回退；只有真实非空 hyp 才会成为 status=ok。
+    if getattr(args, "require_accepted_ok", False):
+        task_by_uid = {str(s["uid"]): (s, r, wav) for s, r, wav in tasks}
+        retry_args = copy.copy(args)
+        retry_args.batch = 1
+        retry_args.retry_mismatch = True
+        for attempt in range(1, max(0, int(args.accepted_ok_retries)) + 1):
+            failed = [
+                uid for uid in task_by_uid
+                if records.get(uid, {}).get("status") != "ok"
+            ]
+            if not failed:
+                break
+            print(
+                f"[ASR_RETRY] attempt={attempt}/{args.accepted_ok_retries} "
+                f"failed_accept={len(failed)} uids={','.join(failed[:20])}",
+                flush=True,
+            )
+            for uid in failed:
+                rec = process_chunk(retry_args, [task_by_uid[uid]], asr, norm_ver)[0]
+                prior = records.get(uid, {})
+                rec["strict_retry"] = {
+                    "attempt": attempt,
+                    "prior_status": prior.get("status"),
+                    "prior_error": prior.get("error"),
+                }
+                records[uid] = rec
+
     for sample, res, status, note in fixed:
         records[sample["uid"]] = fixed_record(sample, res, status, note, norm_ver)
 
@@ -1046,6 +1093,18 @@ def main() -> int:
     print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score_new']}")
     print(f"[OK] asr_results.jsonl → {out_path}（{len(ordered)} 条）")
     print(f"[OK] summary → {out_dir}")
+    if getattr(args, "require_accepted_ok", False):
+        bad = [
+            r for r in ordered
+            if r.get("decision") == "accept" and r.get("status") != "ok"
+        ]
+        if bad:
+            print(
+                "[ERR] 严格 ASR 覆盖失败：以下接受正样本在全部真实重试后仍非 ok: "
+                + ", ".join(f"{r.get('uid')}({r.get('status')})" for r in bad[:50]),
+                file=sys.stderr,
+            )
+            return 2
     return 0
 
 

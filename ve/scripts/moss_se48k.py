@@ -51,10 +51,19 @@ class MossFormer2SE48K:
 
     def enhance_48k(self, wav: np.ndarray) -> np.ndarray:
         """输入和输出均为单声道 float32 48 kHz；长度须由调用方校验。"""
-        x = np.asarray(wav, dtype=np.float32).reshape(1, -1)
-        if x.shape[1] == 0:
+        return self.enhance_many_48k([wav])[0]
+
+    def enhance_many_48k(self, wavs: list[np.ndarray]) -> list[np.ndarray]:
+        """等长 48 kHz 波形批推理；CMD 三流可合成一个 batch，减少 GPU 调度开销。"""
+        if not wavs:
+            return []
+        xs = [np.asarray(w, dtype=np.float32).reshape(-1) for w in wavs]
+        lengths = [len(w) for w in xs]
+        if not all(lengths):
             raise ValueError("empty waveform")
-        out = self._model(x)
+        if len(set(lengths)) != 1:
+            raise ValueError(f"enhance_many_48k requires equal lengths, got={lengths}")
+        out = self._model(np.stack(xs, axis=0))
         # ClearVoice 的 tensor-to-tensor 接口在不同版本可能返回 Tensor / ndarray / list。
         if hasattr(out, "detach"):
             out = out.detach().cpu().numpy()
@@ -62,7 +71,9 @@ class MossFormer2SE48K:
             if len(out) != 1:
                 raise RuntimeError(f"unexpected ClearVoice output list length={len(out)}")
             out = out[0]
-        y = np.asarray(out, dtype=np.float32).reshape(-1)
-        if len(y) < 1:
+        y = np.asarray(out, dtype=np.float32)
+        if y.ndim == 1:
+            y = y.reshape(1, -1)
+        if y.ndim != 2 or y.shape[0] != len(xs) or y.shape[1] < 1:
             raise RuntimeError("ClearVoice returned empty waveform")
-        return y
+        return [np.asarray(y[i, : lengths[i]], dtype=np.float32) for i in range(len(xs))]

@@ -68,6 +68,8 @@ Presence 门控
                       产物独立放在 $VE_OUT/cmd_se/extracted/，不改主门控/正式 ASR。
                       首次须运行 ./download_moss_se48k.sh；CMD_SE=0 可关闭该实验臂。
   CLEARVOICE_ROOT     ClearerVoice-Studio 根；默认 /root/autodl-tmp/ClearerVoice-Studio
+  SEP_REUSE_ROOT      已验证的旧 VE_OUT/sep_streams；CMD 未变、仅更换 KWS/阈值/TSE 时复用。
+                      对每条 mix 做波形指纹验证；不一致自动重新分离。STRICT_SEP_REUSE=1 则不一致即失败。
   LANG_SPLIT          1=按 zh/en 分 thr（默认 1）
   ENROLL_VAD          1=enroll 能量 VAD；0=关闭。提交默认 0（LOCKED_THR=1 会强制 0）
                       → VE_OUT / 校准目录带 _vad 或 _novad，结果可并存
@@ -92,7 +94,7 @@ Presence 门控
   ASR_LANGUAGE        强制 Qwen3 language（如 Chinese）；空=自动
   ASR_HOTWORDS=1      Qwen3 热词表 context（推荐于指令式 domain）
   ASR_DOMAIN_CONTEXT=1  智能家居指令 context，不用唤醒词
-  ASR_RETRY_MISMATCH=1  hyp 与时长不匹配时二次解码，回退 mix
+  ASR_RETRY_MISMATCH=1  hyp 与时长不匹配时二次解码，回退 mix（STRICT_EVAL=1 时自动开启）
   ASR_RESUME         1=仅在音频与配置未变时手动复用 ASR；正式跑分默认 0（禁用复用）
   ROUTE_MIN_GAIN  adaptive_route 最小声纹增益，默认 0.03
   HOLDOUT_SEED        holdout 随机种子；默认 0
@@ -241,6 +243,8 @@ LOCKED_THR="${LOCKED_THR:-1}"
 EXTRA_REJECT="${EXTRA_REJECT:-1}"
 CMD_SE="${CMD_SE:-1}"
 CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/autodl-tmp/ClearerVoice-Studio}"
+SEP_REUSE_ROOT="${SEP_REUSE_ROOT:-}"
+STRICT_SEP_REUSE="${STRICT_SEP_REUSE:-0}"
 # CMD-SE 必须读取每条 CMD 的三流；默认强制落盘并检查所有 pos/neg × accept/reject。
 SAVE_SEP_WAVS="${SAVE_SEP_WAVS:-0}"
 if [[ "$CMD_SE" == "1" ]]; then SAVE_SEP_WAVS=1; fi
@@ -336,6 +340,7 @@ echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP SAVE_SEP_WAVS=$SAVE_S
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=${BEST_SEP_DIR:-"(auto scan)"} DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
+[[ -n "$SEP_REUSE_ROOT" ]] && echo "SEP_REUSE_ROOT=$SEP_REUSE_ROOT STRICT_SEP_REUSE=$STRICT_SEP_REUSE"
 echo "PYTHON_BIN=$PYTHON_BIN"
 "$PYTHON_BIN" -c "import sys; print('sys.executable=', sys.executable)"
 case "$(echo "$PRESENCE_BACKEND" | tr '[:upper:]' '[:lower:]')" in
@@ -498,6 +503,8 @@ EXT_ARGS=(
 [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
 [[ "$SAVE_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--save-sep-wavs)
 [[ "$STRICT_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--strict-sep-wavs)
+[[ -n "$SEP_REUSE_ROOT" ]] && EXT_ARGS+=(--reuse-sep-root "$SEP_REUSE_ROOT")
+[[ "$STRICT_SEP_REUSE" == "1" ]] && EXT_ARGS+=(--strict-reuse-sep)
 [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)
 [[ "$LIMIT" != "0" ]] && EXT_ARGS+=(--limit "$LIMIT")
 [[ -n "${WESEP_MODEL_DIR:-}" ]] && EXT_ARGS+=(--wesep-model-dir "$WESEP_MODEL_DIR")
@@ -520,6 +527,8 @@ if [[ "${ASNORM:-0}" == "1" ]]; then
   [[ "$USE_SEP" == "1" ]] && EXT_ARGS+=(--use-sep --sep-depth 1)
   [[ "$SAVE_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--save-sep-wavs)
   [[ "$STRICT_SEP_WAVS" == "1" ]] && EXT_ARGS+=(--strict-sep-wavs)
+  [[ -n "$SEP_REUSE_ROOT" ]] && EXT_ARGS+=(--reuse-sep-root "$SEP_REUSE_ROOT")
+  [[ "$STRICT_SEP_REUSE" == "1" ]] && EXT_ARGS+=(--strict-reuse-sep)
   [[ "$ENROLL_VAD" == "1" ]] && EXT_ARGS+=(--enroll-vad) || EXT_ARGS+=(--no-enroll-vad)
   [[ "$LIMIT" != "0" ]] && EXT_ARGS+=(--limit "$LIMIT")
   [[ -n "${WESEP_MODEL_DIR:-}" ]] && EXT_ARGS+=(--wesep-model-dir "$WESEP_MODEL_DIR")
@@ -570,7 +579,7 @@ step "[4/8] cmd_se_48k ranked contrast"
 if [[ "$CMD_SE" == "1" ]]; then
   CMD_SE_ARGS=(
     --samples "$SAMPLES"
-    --sep-root "$VE_OUT/sep_streams"
+    --sep-root "${SEP_REUSE_ROOT:-$VE_OUT/sep_streams}"
     --out-dir "$VE_OUT/cmd_se"
     --clearvoice-root "$CLEARVOICE_ROOT"
     --presence-backend "$PRESENCE_BACKEND"
@@ -601,6 +610,9 @@ else
   [[ "${ASR_HOTWORDS:-0}" == "1" ]] && ASR_ARGS+=(--hotwords)
   [[ "${ASR_DOMAIN_CONTEXT:-0}" == "1" ]] && ASR_ARGS+=(--domain-context)
   [[ "${ASR_RETRY_MISMATCH:-0}" == "1" ]] && ASR_ARGS+=(--retry-mismatch)
+  # 正式评测必须先把所有 accepted pos 重试到真实 ok；否则此处就停止，
+  # 不能留给 final_evaluate 输出一个 coverage-error 的伪完成分数。
+  [[ "$STRICT_EVAL" == "1" ]] && ASR_ARGS+=(--require-accepted-ok --retry-mismatch)
   [[ "$ASR_RESUME" != "1" ]] && ASR_ARGS+=(--no-resume)
   if ! "$PYTHON_BIN" "$ROOT/scripts/asr_cer.py" "${ASR_ARGS[@]}"; then
     if [[ "$STRICT_EVAL" == "1" ]]; then

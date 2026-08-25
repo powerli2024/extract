@@ -17,6 +17,7 @@ PIPELINE / --tse-backend:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import time
@@ -98,6 +99,43 @@ def extracted_filename(uid: str, backend: str, meta: dict[str, Any] | None) -> s
     return f"{uid}.wav"
 
 
+def waveform_fingerprint(wav: Any, sr: int) -> str:
+    """格式无关的 CMD 波形指纹，避免误复用别的 CMD 三流。"""
+    import numpy as np
+
+    x = np.asarray(wav, dtype=np.float32).reshape(-1)
+    # sep_streams 写 WAV 时可能经历 16-bit 容器量化；14-bit 使同一 CMD 的
+    # 源文件/缓存文件稳定一致，同时远高于“错误 UID 音频”会出现的差异尺度。
+    q = np.rint(np.clip(x, -1.0, 1.0) * 8191.0).astype("<i2", copy=False)
+    h = hashlib.sha256()
+    h.update(f"sr={int(sr)};n={len(q)};".encode())
+    h.update(q.tobytes())
+    return h.hexdigest()
+
+
+def load_reusable_d1_streams(
+    root: Path, split: str, uid: str, cmd: Any, sr: int
+) -> tuple[dict[str, Any] | None, str]:
+    """仅 mix 指纹与本轮 CMD 一致时，安全返回 d1 的三个缓存流。"""
+    base = Path(root) / "d1" / str(split) / str(uid)
+    need = {name: base / f"{name}.wav" for name in ("mix", "d1_spk1", "d1_spk2")}
+    missing = [name for name, p in need.items() if not p.is_file()]
+    if missing:
+        return None, f"missing:{','.join(missing)}"
+    try:
+        mix, mix_sr = load_audio(need["mix"])
+        if waveform_fingerprint(mix, mix_sr) != waveform_fingerprint(cmd, sr):
+            return None, "mix_fingerprint_mismatch"
+        streams: dict[str, Any] = {"mix": mix}
+        for name in ("d1_spk1", "d1_spk2"):
+            streams[name], stream_sr = load_audio(need[name])
+            if int(stream_sr) != int(sr):
+                return None, f"sr_mismatch:{name}:{stream_sr}!={sr}"
+        return streams, "hit"
+    except Exception as e:  # noqa: BLE001
+        return None, f"read_error:{type(e).__name__}:{e}"
+
+
 def sep_cache_coverage(
     rows: list[dict[str, Any]], sep_root: Path, depth: int
 ) -> dict[str, Any]:
@@ -154,6 +192,14 @@ def parse_args() -> argparse.Namespace:
         "--strict-sep-wavs",
         action="store_true",
         help="保存中间轨时要求所有样本均有 mix 与 d1 双轨（separator 失败例外），否则返回非零",
+    )
+    p.add_argument(
+        "--reuse-sep-root", type=Path, default=None,
+        help="复用已有 sep_streams 根；只有缓存 mix 与本轮 CMD 波形指纹一致时才使用 d1 三流",
+    )
+    p.add_argument(
+        "--strict-reuse-sep", action="store_true",
+        help="缓存未命中时不允许回退重新分离，直接失败",
     )
     p.add_argument(
         "--tse-backend",
@@ -466,6 +512,10 @@ def main() -> int:
         if args.save_sep_wavs and actual_depth >= 1
         else None
     )
+    reuse_sep_root = args.reuse_sep_root.resolve() if args.reuse_sep_root else None
+    if reuse_sep_root is not None and not (reuse_sep_root / "d1").is_dir():
+        raise SystemExit(f"--reuse-sep-root 缺少 d1/: {reuse_sep_root}")
+    reuse_stats: dict[str, int] = {"hit": 0, "miss": 0, "fresh": 0}
 
     by_split: dict[str, list[dict[str, Any]]] = {s: [] for s in splits}
     t_run0 = time.time()
@@ -507,10 +557,31 @@ def main() -> int:
             save_dir = None
             if sep_root is not None:
                 save_dir = sep_root / split / uid
+            cached_streams = None
+            cache_state = "fresh"
+            cache_dir = None
+            if reuse_sep_root is not None and actual_depth == 1:
+                cached_streams, cache_state = load_reusable_d1_streams(
+                    reuse_sep_root, split, uid, cmd, sr
+                )
+                if cached_streams is not None:
+                    reuse_stats["hit"] += 1
+                    cache_dir = reuse_sep_root / "d1" / split / uid
+                    # 外部缓存不复制，既避免无意义 I/O，也保留唯一可追溯来源。
+                    save_dir = None
+                else:
+                    reuse_stats["miss"] += 1
+                    if args.strict_reuse_sep:
+                        raise RuntimeError(f"strict reusable sep cache miss: {cache_state}")
             pr, streams, enroll_emb = gate.score_with_streams(
-                enroll, cmd, enroll_key=uid, sr=sr, thr=thr, save_dir=save_dir
+                enroll, cmd, enroll_key=uid, sr=sr, thr=thr, save_dir=save_dir,
+                precomputed_streams=cached_streams, precomputed_sep_dir=cache_dir,
             )
+            if cached_streams is None:
+                reuse_stats["fresh"] += 1
             rec.update(pr.to_dict())
+            rec["sep_source"] = "cache" if cached_streams is not None else "fresh"
+            rec["sep_cache_validation"] = cache_state
             rec["presence_thr"] = thr
             rec["presence_ms"] = round((time.time() - t0) * 1000, 1)
 
@@ -647,17 +718,20 @@ def main() -> int:
             "force_extract": args.force_extract,
             "skip_tse": args.skip_tse,
             "thr_file": str(thr_file) if thr_file else None,
+            "reuse_sep_root": str(reuse_sep_root) if reuse_sep_root else None,
+            "reuse_sep_stats": reuse_stats,
         },
     )
-    if sep_root is not None:
-        coverage = sep_cache_coverage(all_rows, ve_out / "sep_streams", actual_depth)
+    coverage_root = reuse_sep_root if reuse_sep_root is not None else (ve_out / "sep_streams")
+    if sep_root is not None or reuse_sep_root is not None:
+        coverage = sep_cache_coverage(all_rows, coverage_root, actual_depth)
         coverage_path = ve_out / "reports" / "sep_streams_coverage.json"
         coverage_path.write_text(
             json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         print(
-            f"[SEP_CACHE] groups={coverage['groups']} missing={coverage['missing_count']} "
-            f"→ {coverage_path}",
+            f"[SEP_CACHE] root={coverage_root} groups={coverage['groups']} "
+            f"missing={coverage['missing_count']} reuse={reuse_stats} → {coverage_path}",
             flush=True,
         )
         if args.strict_sep_wavs and coverage["missing_count"]:
