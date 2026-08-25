@@ -1090,7 +1090,13 @@ def main() -> int:
         f"POS  FRR={summary['frr_pos']:.6f}  false_reject={summary['n_pos_false_reject']}/{summary['n_pos']} "
         f"CER={summary['cer_total']:.6f} ({summary['total_errors']}/{summary['total_ref_chars']})"
     )
-    print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score_new']}")
+    if summary["contest_score_new"] is None:
+        print(
+            "SCORE contest=N/A (all-positive ASR stage has no negative samples; "
+            "official score is computed after gate decisions are joined)"
+        )
+    else:
+        print(f"SCORE contest=(RR + 1 - CER)/2 = {summary['contest_score_new']}")
     print(f"[OK] asr_results.jsonl → {out_path}（{len(ordered)} 条）")
     print(f"[OK] summary → {out_dir}")
     if getattr(args, "require_accepted_ok", False):

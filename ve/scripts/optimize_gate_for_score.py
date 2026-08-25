@@ -362,23 +362,26 @@ def main() -> int:
                     "score_delta_vs_baseline": (
                         metrics["contest_score"] - baseline_metrics["contest_score"]
                         if baseline_metrics
-                        else 0.0
+                        else None
                     ),
                 }
             )
 
     for config, vals in cv_rows.items():
         policy, mode = config.split("@", 1)
+        distributions = {
+            key: _dist([float(v[key]) for v in vals])
+            for key in ("contest_score", "rr", "cer_pos_micro", "frr", "thr_zh", "thr_en")
+        }
+        distributions["score_delta_vs_baseline"] = (
+            _dist([float(v["score_delta_vs_baseline"]) for v in vals])
+            if baseline_thresholds is not None
+            else None
+        )
         report["holdout"][config] = {
             "policy": policy,
             "threshold_mode": mode,
-            "distributions": {
-            key: _dist([float(v[key]) for v in vals])
-            for key in (
-                "contest_score", "score_delta_vs_baseline", "rr",
-                "cer_pos_micro", "frr", "thr_zh", "thr_en",
-            )
-            },
+            "distributions": distributions,
         }
     # 先按保守尾部而非均值排名，避免从大量候选中挑到偶然高分臂。
     stable_policies = [
@@ -413,9 +416,13 @@ def main() -> int:
         "threshold_mode": deploy_mode,
         "best_experimental_configuration": best,
         "basis": (
-            "highest conservative holdout p05 among policies whose paired delta p05 is positive"
-            if stable
-            else "no stable gain: paired holdout score delta p05 is not positive"
+            "highest conservative holdout p05; no external baseline supplied"
+            if baseline_thresholds is None
+            else (
+                "highest conservative holdout p05 among policies whose paired delta p05 is positive"
+                if stable
+                else "no stable gain: paired holdout score delta p05 is not positive"
+            )
         ),
         "deploy_thresholds_candidate": deploy_thresholds,
         "threshold_estimator": "median of repeated training-fold optima" if stable else "frozen baseline",
@@ -460,12 +467,15 @@ def main() -> int:
     ]
     for config in configurations:
         h = report["holdout"][config]["distributions"]
+        delta = h.get("score_delta_vs_baseline")
+        delta_text = (
+            f"{delta['mean']:.6f} [{delta['p05']:.6f},{delta['p95']:.6f}]"
+            if delta is not None else "N/A"
+        )
         lines.append(
             f"| {config} | {h['contest_score']['mean']:.6f} | "
             f"{h['contest_score']['p05']:.6f}-{h['contest_score']['p95']:.6f} | "
-            f"{h['score_delta_vs_baseline']['mean']:.6f} "
-            f"[{h['score_delta_vs_baseline']['p05']:.6f},"
-            f"{h['score_delta_vs_baseline']['p95']:.6f}] | "
+            f"{delta_text} | "
             f"{h['rr']['mean']:.6f} | {h['cer_pos_micro']['mean']:.6f} | "
             f"{h['frr']['mean']:.6f} |"
         )
