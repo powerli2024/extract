@@ -19,15 +19,14 @@ CMD_SE_POLICIES="${CMD_SE_POLICIES:-max}"
 mkdir -p "$OUT_ROOT"
 CMD_SE_OUT="$OUT_ROOT/ranked"
 CMD_SE_RESULTS="$CMD_SE_OUT/results/se48k_ranked_results.jsonl"
-if [[ "${FORCE_CMD_SE:-0}" != "1" && -f "$CMD_SE_RESULTS" ]]; then
-  echo "[REUSE] CMD-SE ranked results: $CMD_SE_RESULTS"
-else
-  "$PYTHON_BIN" "$ROOT/scripts/rank_sep_streams_se48k.py" \
-    --samples "$SCREEN_ARM/manifest/samples.jsonl" \
-    --sep-root "$SEP_REUSE_ROOT" --out-dir "$CMD_SE_OUT" \
-    --clearvoice-root "$CLEARVOICE_ROOT" --presence-backend "${PRESENCE_BACKEND:-eres2netv2}" \
-    --device "${DEVICE:-cuda:0}" --no-enroll-vad --strict
-fi
+RANK_ARGS=(
+  --samples "$SCREEN_ARM/manifest/samples.jsonl"
+  --sep-root "$SEP_REUSE_ROOT" --out-dir "$CMD_SE_OUT"
+  --clearvoice-root "$CLEARVOICE_ROOT" --presence-backend "${PRESENCE_BACKEND:-eres2netv2}"
+  --device "${DEVICE:-cuda:0}" --no-enroll-vad --strict
+)
+[[ "${FORCE_CMD_SE:-0}" == "1" ]] && RANK_ARGS+=(--no-resume) || RANK_ARGS+=(--resume)
+"$PYTHON_BIN" "$ROOT/scripts/rank_sep_streams_se48k.py" "${RANK_ARGS[@]}"
 
 IFS=',' read -r -a ARMS <<< "$CMD_SE_ARMS"
 for arm_spec in "${ARMS[@]}"; do

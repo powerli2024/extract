@@ -87,6 +87,28 @@ def enhance_with_oom_retry(
     """优先三流 batch；OOM 时先退化单流，再按 8/4/2 秒分段，非 OOM 原样抛出。"""
     names = list(waves)
     values = [waves[n] for n in names]
+    # mix 可能保留完整时长，而分离轨受模型最大长度截断；重采样也可能产生数十
+    # 个采样点的舍入差。ClearVoice batch 要求严格等长，此时直接逐流推理。
+    if len({len(w) for w in values}) != 1:
+        log("unequal_lengths_retry_single")
+        try:
+            return {name: se.enhance_48k(waves[name]) for name in names}, "single_unequal"
+        except Exception as e:
+            if not is_oom(e):
+                raise
+            empty_cuda_cache()
+            last: Exception = e
+        for sec in (8.0, 4.0, 2.0):
+            try:
+                log(f"oom_single_retry_chunk{sec:g}s")
+                out = {name: enhance_chunked(se, waves[name], chunk_sec=sec) for name in names}
+                return out, f"chunk{sec:g}s"
+            except Exception as e:
+                if not is_oom(e):
+                    raise
+                last = e
+                empty_cuda_cache()
+        raise last
     try:
         out = se.enhance_many_48k(values)
         return dict(zip(names, out)), "batch3"
@@ -128,6 +150,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--enroll-vad", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--enroll-vad-max-sec", type=float, default=4.0)
     p.add_argument("--strict", action="store_true", help="任一三流缺失或 SE 失败即返回非零")
+    p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                   help="复用已有且四条导出音频完整的成功行（默认开启）")
     return p.parse_args()
 
 
@@ -148,6 +172,18 @@ def main() -> int:
     extracted = ensure_dir(out_dir / "extracted")
     result_path = ensure_dir(out_dir / "results") / "se48k_ranked_results.jsonl"
 
+    existing: dict[str, dict[str, Any]] = {}
+    if args.resume and result_path.is_file():
+        for row in load_jsonl(result_path):
+            uid = str(row.get("uid") or "")
+            exports = row.get("exported") or {}
+            paths = [x.get("path") for cond in ("raw", "se48k") for x in (exports.get(cond) or [])]
+            if (
+                uid and row.get("status") == "ok" and len(paths) == 4
+                and all(p and Path(str(p)).is_file() for p in paths)
+            ):
+                existing[uid] = row
+
     enc = create_presence_encoder(
         args.presence_backend, eres_dir=args.eres_dir or default_eres2net_dir(), device=args.device
     )
@@ -157,7 +193,7 @@ def main() -> int:
 
     enroll_cache: dict[str, np.ndarray] = {}
     rows: list[dict[str, Any]] = []
-    n_ok = n_error = n_oom_retried = 0
+    n_ok = n_error = n_oom_retried = n_unequal_single = n_reused = 0
     t0 = time.time()
     for idx, sample in enumerate(samples, 1):
         uid, split = str(sample["uid"]), str(sample.get("split", "pos"))
@@ -170,6 +206,11 @@ def main() -> int:
                 "se_model_sr": 48000, "resample": "poly", "export_sr": 16000,
             },
         }
+        if uid in existing:
+            rows.append(existing[uid])
+            n_ok += 1
+            n_reused += 1
+            continue
         try:
             if uid not in enroll_cache:
                 ew, esr = load_audio(sample["enroll_wav"])
@@ -192,7 +233,8 @@ def main() -> int:
 
             retries: list[str] = []
             enhanced48, se_mode = enhance_with_oom_retry(se, upsampled, log=retries.append)
-            n_oom_retried += len(retries) > 0
+            n_oom_retried += any(x.startswith("oom_") for x in retries)
+            n_unequal_single += "unequal_lengths_retry_single" in retries
             enhanced = {
                 name: resample_wav(w, 48000, 16000, method="poly")
                 for name, w in enhanced48.items()
@@ -250,7 +292,9 @@ def main() -> int:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     summary = {
         "n": len(rows), "n_ok": n_ok, "n_error": n_error,
-        "n_oom_retried": n_oom_retried, "elapsed_sec": round(time.time() - t0, 2),
+        "n_oom_retried": n_oom_retried, "n_unequal_single": n_unequal_single,
+        "n_reused": n_reused,
+        "elapsed_sec": round(time.time() - t0, 2),
         "results": str(result_path),
     }
     (out_dir / "reports").mkdir(parents=True, exist_ok=True)
