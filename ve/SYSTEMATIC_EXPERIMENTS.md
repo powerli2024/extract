@@ -27,14 +27,18 @@ SEEDS=200 HOLDOUT_FRAC=0.30 THRESHOLD_MODES=global,lang_split TOP_K=3 ./run_syst
 export FINALISTS='mixed_max|/root/autodl-tmp/mixed_best/mixed_best|/root/autodl-tmp/ve_systematic_v1/gate/mixed/reports/gate_score_opt|max;dae_rescue|/root/autodl-tmp/EXP02_DAE_THEN_MossFormer2_SE_48K|/root/autodl-tmp/ve_systematic_v1/gate/dae_se/reports/gate_score_opt|strict_rescue'
 export PIPELINES='mix,sep_route,adaptive_route,wesep,ps4,cond_tasnet'
 export EXP_ROOT=/root/autodl-tmp/ve_systematic_v1
-BASELINE_PIPELINE=sep_route BOOTSTRAP_REPLICATES=5000 ./run_systematic_finalists.sh
+RUN_CMD_SE=1 \
+CMD_SE_ARMS=raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better \
+BASELINE_PIPELINE=sep_route \
+BOOTSTRAP_REPLICATES=5000 \
+./run_systematic_finalists.sh
 ```
 
 第一个 finalist 的 `BASELINE_PIPELINE` 会额外用仓库冻结 `locked_thr.json` 生成真实基线，并作为 bootstrap 的第一项。正式候选必须满足：全量、all-positive ASR 全部 `ok`、`ASR_RESUME=0`、final coverage errors 为 0。最终先看实际官方分，再要求相对冻结基线的配对 bootstrap 分差 `p05>0`；同时检查中英文切片。若最高分臂没有稳定增益，选择基线或结构更简单、延迟更低的臂。确认赢家后，再用其 `gate_opt/recommended_thr.json` 做一次标准 `run_all.sh` 全链路复核与延迟测试。
 
 ## 3. Controlled ablations
 
-- `CMD_SE=1` 目前只生成 raw/SE48K 的声纹排序对照，不替换正式 ASR 输入，不能仅凭该开关声称分数提升。应把候选音频接入独立 ASR/decision overlay 后再严格计分。
+- `RUN_CMD_SE=1` 会正式评测 `gate(raw/se48k) × ASR音频(raw/se48k) × best/better`。例如 `raw:se48k:best` 固定 raw 门控、只替换 SE 音频，可隔离识别收益；`se48k:raw:best` 只改变门控，可隔离 RR/FRR 变化；`se48k:se48k:best` 是完整 SE 方案。各臂独立重算 RR、FRR、CER。`run_all.sh` 中单独的 `CMD_SE=1` 仍只是生成候选，不应与正式矩阵混淆。
 - `EXTRA_REJECT=0` 是主线。额外拒识只有在同一严格评测中提高官方分且 bootstrap 稳定时才开启。
 - AS-Norm、窗口最大值、VAD 与新编码器会改变分数尺度，必须各自重新优化阈值，禁止复用其他臂的阈值。
 - Wesep/PS4/Cond-TasNet 先用小规模冒烟验证依赖和输出，再跑全量；冒烟分数不进入排名。

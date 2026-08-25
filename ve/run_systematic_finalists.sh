@@ -81,6 +81,26 @@ for spec in "${ITEMS[@]}"; do
       BASELINE_RANK_ARGS=(--candidate "locked.$pl=$baseline_root")
     fi
   done
+  if [[ "${RUN_CMD_SE:-1}" == "1" ]]; then
+    cmd_se_root="$arm_root/cmd_se"
+    SCREEN_ARM="$screen_arm" SEP_REUSE_ROOT="${SEP_REUSE_ROOT:-}" \
+      CMD_SE_EXP_ROOT="$cmd_se_root" \
+      CMD_SE_ARMS="${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better}" \
+      CMD_SE_POLICIES="$policy" CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/autodl-tmp/ClearerVoice-Studio}" \
+      SEEDS="${SEEDS:-200}" HOLDOUT_FRAC="${HOLDOUT_FRAC:-0.30}" \
+      THRESHOLD_MODES="${THRESHOLD_MODES:-global,lang_split}" \
+      bash "$ROOT/run_cmd_se_score_matrix.sh"
+    IFS=',' read -r -a SE_ARMS <<< "${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better}"
+    for se_spec in "${SE_ARMS[@]}"; do
+      if [[ "$se_spec" == *:*:* ]]; then
+        IFS=':' read -r gate_cond audio_cond slot <<< "$se_spec"
+      else
+        audio_cond="${se_spec%_*}"; gate_cond="$audio_cond"; slot="${se_spec##*_}"
+      fi
+      se_arm="${gate_cond}gate_${audio_cond}_${slot}"
+      RANK_ARGS+=(--candidate "$name.cmd_se.$se_arm=$cmd_se_root/arms/$se_arm/eval")
+    done
+  fi
   first_finalist=0
 done
 if [[ "${#BASELINE_RANK_ARGS[@]}" == "0" ]]; then
