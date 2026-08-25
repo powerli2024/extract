@@ -64,6 +64,10 @@ Presence 门控
                       sep_route 强制为 1
   SAVE_SEP_WAVS       1=保存 mix 与 MossFormer 中间分离轨到 sep_streams/d1/（默认 0；占用磁盘）
   STRICT_SEP_WAVS     1=SAVE_SEP_WAVS 时要求四类样本缓存完整（默认随 SAVE_SEP_WAVS=1 开启）
+  CMD_SE              1=对 CMD 的 mix/d1_spk1/d1_spk2 加 MossFormer2_SE_48K 对照并各取声纹前二（默认 1）
+                      产物独立放在 $VE_OUT/cmd_se/extracted/，不改主门控/正式 ASR。
+                      首次须运行 ./download_moss_se48k.sh；CMD_SE=0 可关闭该实验臂。
+  CLEARVOICE_ROOT     ClearerVoice-Studio 根；默认 /root/autodl-tmp/ClearerVoice-Studio
   LANG_SPLIT          1=按 zh/en 分 thr（默认 1）
   ENROLL_VAD          1=enroll 能量 VAD；0=关闭。提交默认 0（LOCKED_THR=1 会强制 0）
                       → VE_OUT / 校准目录带 _vad 或 _novad，结果可并存
@@ -235,7 +239,11 @@ fi
 # 提交默认：冻结 τ + 叠话加拒。实验臂 FORCE_CALIB / 滑窗会关掉锁定 τ。
 LOCKED_THR="${LOCKED_THR:-1}"
 EXTRA_REJECT="${EXTRA_REJECT:-1}"
+CMD_SE="${CMD_SE:-1}"
+CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/autodl-tmp/ClearerVoice-Studio}"
+# CMD-SE 必须读取每条 CMD 的三流；默认强制落盘并检查所有 pos/neg × accept/reject。
 SAVE_SEP_WAVS="${SAVE_SEP_WAVS:-0}"
+if [[ "$CMD_SE" == "1" ]]; then SAVE_SEP_WAVS=1; fi
 STRICT_SEP_WAVS="${STRICT_SEP_WAVS:-$SAVE_SEP_WAVS}"
 CMD_WINDOWS="${CMD_WINDOWS:-off}"
 STREAM_POLICY="${STREAM_POLICY:-max}"
@@ -324,7 +332,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== VE run_all ==="
 echo "PIPELINE=$PIPELINE TSE_BACKEND=$TSE_BACKEND"
-echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP SAVE_SEP_WAVS=$SAVE_SEP_WAVS STRICT_SEP_WAVS=$STRICT_SEP_WAVS STREAM_POLICY=$STREAM_POLICY LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
+echo "Presence: backend=$PRESENCE_BACKEND USE_SEP=$USE_SEP SAVE_SEP_WAVS=$SAVE_SEP_WAVS STRICT_SEP_WAVS=$STRICT_SEP_WAVS CMD_SE=$CMD_SE STREAM_POLICY=$STREAM_POLICY LANG_SPLIT=$LANG_SPLIT ENROLL_VAD=$ENROLL_VAD ASNORM=${ASNORM:-0} HOLDOUT_FRAC=$HOLDOUT_FRAC LOCKED_THR=$LOCKED_THR EXTRA_REJECT=$EXTRA_REJECT"
 echo "VE_OUT=$VE_OUT CALIB_DIR=$CALIB_DIR VAD_TAG=$VAD_TAG CMD_WINDOWS=$CMD_WINDOWS ASR_CROP=$ASR_CROP"
 echo "DATA_DIR=$DATA_DIR BEST_SEP=${BEST_SEP_DIR:-"(auto scan)"} DEVICE=$DEVICE"
 echo "MOSS_ONNX_PATH=$MOSS_ONNX_PATH"
@@ -365,6 +373,19 @@ if [[ "$need_moss" == "1" ]]; then
     && ! "$PYTHON_BIN" -c "import sys; sys.path.insert(0,'$ROOT/../VM/scripts'); from mossformer2_onnx import MossFormer2Separator" 2>/dev/null \
     && ! "$PYTHON_BIN" -c "from mossformer2_onnx import MossFormer2Separator" 2>/dev/null; then
     echo "[ERR] 无法 import mossformer2_onnx。extract 仓应有 ../scripts/mossformer2_onnx.py"
+    exit 1
+  fi
+fi
+if [[ "$CMD_SE" == "1" ]]; then
+  ck="$CLEARVOICE_ROOT/clearvoice/checkpoints/MossFormer2_SE_48K/last_best_checkpoint"
+  if [[ ! -f "$ck" ]]; then
+    echo "[ERR] CMD_SE=1 但缺少 MossFormer2_SE_48K: $ck"
+    echo "      请先: cd $ROOT && PYTHON_BIN=$PYTHON_BIN CLEARVOICE_ROOT=$CLEARVOICE_ROOT ./download_moss_se48k.sh"
+    echo "      或本轮明确关闭: CMD_SE=0 ./run_all.sh"
+    exit 1
+  fi
+  if ! "$PYTHON_BIN" -c "import yamlargparse, pydub" 2>/dev/null; then
+    echo "[ERR] CMD_SE=1 需要 ClearVoice 依赖（yamlargparse, pydub）。请先 ./download_moss_se48k.sh"
     exit 1
   fi
 fi
@@ -545,10 +566,30 @@ fi
 n_res="$("$PYTHON_BIN" -c "print(sum(1 for _ in open('$VE_OUT/results/all_results.jsonl',encoding='utf-8')))")"
 echo "[OK] extract 完成 n=$n_res → $VE_OUT/results/all_results.jsonl"
 
-step "[4/7] tse_ab placeholder report"
+step "[4/8] cmd_se_48k ranked contrast"
+if [[ "$CMD_SE" == "1" ]]; then
+  CMD_SE_ARGS=(
+    --samples "$SAMPLES"
+    --sep-root "$VE_OUT/sep_streams"
+    --out-dir "$VE_OUT/cmd_se"
+    --clearvoice-root "$CLEARVOICE_ROOT"
+    --presence-backend "$PRESENCE_BACKEND"
+    --device "$DEVICE"
+    --strict
+  )
+  [[ "$LIMIT" != "0" ]] && CMD_SE_ARGS+=(--limit "$LIMIT")
+  [[ "$ENROLL_VAD" == "1" ]] && CMD_SE_ARGS+=(--enroll-vad) || CMD_SE_ARGS+=(--no-enroll-vad)
+  echo "[CMD] $PYTHON_BIN $ROOT/scripts/rank_sep_streams_se48k.py ${CMD_SE_ARGS[*]}"
+  PYTHONUNBUFFERED=1 "$PYTHON_BIN" "$ROOT/scripts/rank_sep_streams_se48k.py" "${CMD_SE_ARGS[@]}"
+  echo "[OK] CMD_SE 对照 → $VE_OUT/cmd_se/extracted (raw/se48k 各前二)"
+else
+  echo "[INFO] CMD_SE=0，跳过 48k SE 对照"
+fi
+
+step "[5/8] tse_ab placeholder report"
 "$PYTHON_BIN" "$ROOT/scripts/tse_ab.py" --ve-out "$VE_OUT" || true
 
-step "[5/7] asr_cer"
+step "[6/8] asr_cer"
 if [[ "${SKIP_ASR:-0}" == "1" ]]; then
   echo "[INFO] SKIP_ASR=1；稍后: VE_OUT=$VE_OUT ./run_asr_cer.sh"
 else
@@ -569,7 +610,7 @@ else
   fi
 fi
 
-step "[6/7] extra_reject + submit result.json"
+step "[7/8] extra_reject + submit result.json"
 FINAL_DECISIONS="$VE_OUT/results/all_results.jsonl"
 if [[ "$EXTRA_REJECT" != "1" ]]; then
   echo "[INFO] EXTRA_REJECT=0，跳过叠话加拒"
@@ -603,7 +644,7 @@ else
   FINAL_DECISIONS="$OVERLAY_ROWS"
 fi
 
-step "[7/7] done"
+step "[8/8] done"
 if [[ "${SKIP_ASR:-0}" != "1" ]]; then
   step "[final] official character-weighted evaluation"
   FINAL_ARGS=(--ve-out "$VE_OUT" --decisions "$FINAL_DECISIONS")
@@ -614,5 +655,6 @@ echo "PIPELINE=$PIPELINE"
 echo "thr: $THR_FILE"
 echo "reports: $VE_OUT/reports"
 echo "extracted: $VE_OUT/extracted"
+[[ "$CMD_SE" == "1" ]] && echo "cmd_se extracted: $VE_OUT/cmd_se/extracted"
 echo "log: $LOG"
 ls -lah "$VE_OUT/reports" || true
