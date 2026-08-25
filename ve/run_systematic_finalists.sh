@@ -8,6 +8,7 @@ DATA_DIR="${DATA_DIR:-/root/autodl-tmp/datasetA}"
 EXP_ROOT="${EXP_ROOT:-/root/autodl-tmp/ve_systematic}"
 FINALISTS="${FINALISTS:-}"
 PIPELINES="${PIPELINES:-mix,sep_route,adaptive_route,wesep,ps4,cond_tasnet}"
+AUTO_PREPARE_FINALISTS="${AUTO_PREPARE_FINALISTS:-1}"
 if [[ -z "$FINALISTS" ]]; then
   echo '[ERR] FINALISTS 为空；格式: name|/kws|/gate_score_opt|policy;name2|...' >&2
   exit 2
@@ -18,8 +19,39 @@ BASELINE_RANK_ARGS=()
 first_finalist=1
 for spec in "${ITEMS[@]}"; do
   IFS='|' read -r name kws opt policy <<< "$spec"
-  if [[ -z "$name" || ! -d "$kws" || ! -f "$opt/recommended_thr.json" || -z "$policy" ]]; then
-    echo "[ERR] invalid finalist: $spec" >&2; exit 2
+  if [[ -z "$name" || -z "$kws" || -z "$policy" ]]; then
+    echo "[ERR] invalid finalist fields: name=${name:-<empty>} kws=${kws:-<empty>} policy=${policy:-<empty>}" >&2
+    echo "      expected: name|/absolute/kws|/absolute/gate_score_opt|policy" >&2
+    exit 2
+  fi
+  if [[ ! -d "$kws" ]]; then
+    echo "[ERR] finalist KWS directory does not exist: $kws" >&2
+    exit 2
+  fi
+  # `auto`/空路径使用本 EXP_ROOT 的标准第一阶段目录；也兼容直接传
+  # recommended_thr.json 文件，而不只接受其父目录。
+  if [[ -z "$opt" || "$opt" == "auto" ]]; then
+    opt="$EXP_ROOT/gate/$name/reports/gate_score_opt"
+  elif [[ -f "$opt" && "$(basename "$opt")" == "recommended_thr.json" ]]; then
+    opt="$(dirname "$opt")"
+  fi
+  if [[ ! -f "$opt/recommended_thr.json" ]]; then
+    echo "[MISS] finalist gate config: $opt/recommended_thr.json" >&2
+    if [[ "$AUTO_PREPARE_FINALISTS" != "1" ]]; then
+      echo "[ERR] set AUTO_PREPARE_FINALISTS=1 to build the missing gate screen" >&2
+      exit 2
+    fi
+    echo ">>> auto-prepare gate screen for finalist=$name"
+    KWS_CANDIDATES="$name=$kws" EXP_ROOT="$EXP_ROOT" TOP_K=1 \
+      SEEDS="${SEEDS:-200}" HOLDOUT_FRAC="${HOLDOUT_FRAC:-0.30}" \
+      THRESHOLD_MODES="${THRESHOLD_MODES:-global,lang_split}" \
+      SEP_REUSE_ROOT="${SEP_REUSE_ROOT:-}" \
+      STRICT_SEP_REUSE="${STRICT_SEP_REUSE:-0}" \
+      bash "$ROOT/run_systematic_gate_screen.sh"
+  fi
+  if [[ ! -f "$opt/recommended_thr.json" ]]; then
+    echo "[ERR] gate auto-prepare finished but config is still missing: $opt/recommended_thr.json" >&2
+    exit 2
   fi
   arm_root="$EXP_ROOT/final/$name"
   screen_arm="$(cd "$opt/../.." && pwd)"

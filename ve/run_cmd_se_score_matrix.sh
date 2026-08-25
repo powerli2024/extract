@@ -52,13 +52,19 @@ for arm_spec in "${ARMS[@]}"; do
   "$PYTHON_BIN" "$ROOT/scripts/prepare_cmd_se_asr_arm.py" \
     --samples "$SCREEN_ARM/manifest/samples.jsonl" --cmd-se-results "$CMD_SE_RESULTS" \
     --condition "$audio_condition" --slot "$slot" --out-dir "$asr_root" --strict
-  if [[ "${FORCE_CMD_SE_ASR:-0}" == "1" \
-        || ! -f "$asr_root/reports/asr_cer/asr_results.jsonl" ]]; then
-    VE_OUT="$asr_root" ASR_RETRY_MISMATCH="${ASR_RETRY_MISMATCH:-1}" \
-      bash "$ROOT/run_asr_cer.sh" --no-resume --require-accepted-ok
+  # 文件存在不等于覆盖完整。默认让 asr_cer 的 resume 逐 UID 校验配置、
+  # decision 与 status；完整项零推理复用，缺失/失败项自动补跑。
+  ASR_REUSE_ARG=--resume
+  if [[ "${FORCE_CMD_SE_ASR:-0}" == "1" ]]; then
+    ASR_REUSE_ARG=--no-resume
+    echo "[FORCE] full CMD-SE ASR rerun: $asr_root"
+  elif [[ -f "$asr_root/reports/asr_cer/asr_results.jsonl" ]]; then
+    echo "[CHECK] CMD-SE ASR coverage/resume: $asr_root/reports/asr_cer/asr_results.jsonl"
   else
-    echo "[REUSE] CMD-SE ASR: $asr_root/reports/asr_cer/asr_results.jsonl"
+    echo "[MISS] CMD-SE ASR; creating: $asr_root/reports/asr_cer/asr_results.jsonl"
   fi
+  VE_OUT="$asr_root" ASR_RETRY_MISMATCH="${ASR_RETRY_MISMATCH:-1}" \
+    bash "$ROOT/run_asr_cer.sh" "$ASR_REUSE_ARG" --require-accepted-ok
   "$PYTHON_BIN" "$ROOT/scripts/build_cmd_se_gate_decisions.py" \
     --base-decisions "$SCREEN_ARM/results/all_results.jsonl" \
     --cmd-se-results "$CMD_SE_RESULTS" --condition "$gate_condition" \
