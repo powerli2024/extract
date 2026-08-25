@@ -55,6 +55,22 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def resolve_best_sep_wav(best_sep: Path, rec: dict[str, Any]) -> str:
     """解析 enroll wav：优先 dest_rel（跨机可移植），再回退 dest_wav（需文件真实存在）。"""
     rel = str(rec.get("dest_rel") or "").replace("\\", "/").lstrip("/")
@@ -115,6 +131,8 @@ def build_items(
         "missing_cmd": [],
         "missing_best_sep_uid": [],
         "invalid_best_sep_uid": [],
+        "external_best_sep_enroll": [],
+        "unhashable_enroll": [],
         "duplicate_best_sep_uid": sorted(set(duplicate_best_sep_uid)),
         "duplicate_dataset_uid": [],
         "by_split": {},
@@ -158,9 +176,27 @@ def build_items(
             if not enroll_wav or not Path(enroll_wav).is_file():
                 qc["missing_enroll"].append(uid)
                 continue
+            enroll_path = Path(enroll_wav).resolve()
+            # `dest_wav` 旧索引可能指向上一次实验的绝对路径。正式比较时
+            # 禁止 selected BEST_SEP_DIR 外部的注册波，避免“换目录却读同一音频”。
+            if not is_within(enroll_path, best_sep):
+                qc["external_best_sep_enroll"].append({
+                    "uid": uid,
+                    "enroll_wav": str(enroll_path),
+                    "best_sep": str(best_sep.resolve()),
+                })
+                if strict_best_sep:
+                    continue
             if not cmd_wav or not Path(cmd_wav).is_file():
                 qc["missing_cmd"].append(uid)
                 continue
+            try:
+                enroll_sha256 = sha256_file(enroll_path)
+            except OSError as exc:
+                qc["unhashable_enroll"].append({"uid": uid, "error": str(exc)})
+                if strict_best_sep:
+                    continue
+                enroll_sha256 = ""
 
             item = {
                 "uid": uid,
@@ -169,7 +205,8 @@ def build_items(
                 "label": label,
                 "kws_rel": wake_rel,
                 "cmd_rel": cmd_rel,
-                "enroll_wav": str(Path(enroll_wav).resolve()),
+                "enroll_wav": str(enroll_path),
+                "enroll_sha256": enroll_sha256,
                 "cmd_wav": str(Path(cmd_wav).resolve()),
                 "wake_text": wake_text,
                 "cmd_text": cmd_text,
@@ -238,6 +275,7 @@ def main() -> int:
             "split": it["split"],
             "id": it["id"],
             "enroll_path": it["enroll_wav"],
+            "enroll_sha256": it.get("enroll_sha256"),
             "wake_text": it["wake_text"],
             "lang": it["lang"],
             "enroll_source": it["enroll_source"],
@@ -292,6 +330,11 @@ def main() -> int:
             if (best_sep / "index.jsonl").is_file()
             else None
         ),
+        "enrollment_content_sha256": hashlib.sha256(
+            "\n".join(
+                f"{it['uid']}\t{it.get('enroll_sha256') or ''}" for it in items
+            ).encode("utf-8")
+        ).hexdigest(),
     }
     (out_dir / "contract.json").write_text(
         json.dumps(contract, ensure_ascii=False, indent=2) + "\n",
@@ -310,6 +353,8 @@ def main() -> int:
         or qc["missing_cmd"]
         or qc["missing_best_sep_uid"]
         or qc["invalid_best_sep_uid"]
+        or qc["external_best_sep_enroll"]
+        or qc["unhashable_enroll"]
         or qc["duplicate_best_sep_uid"]
         or qc["duplicate_dataset_uid"]
         or len(items) != qc["n_dataset"]
