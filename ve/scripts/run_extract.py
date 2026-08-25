@@ -98,6 +98,36 @@ def extracted_filename(uid: str, backend: str, meta: dict[str, Any] | None) -> s
     return f"{uid}.wav"
 
 
+def sep_cache_coverage(
+    rows: list[dict[str, Any]], sep_root: Path, depth: int
+) -> dict[str, Any]:
+    """核验中间轨在 pos/neg × accept/reject 四类中的完整性。"""
+    groups: dict[str, dict[str, Any]] = {}
+    missing: list[dict[str, str]] = []
+    for row in rows:
+        split = str(row.get("split") or "?")
+        decision = "accept" if str(row.get("decision")) == "accept" else "reject_or_error"
+        key = f"{split}_{decision}"
+        block = groups.setdefault(key, {"n": 0, "mix_saved": 0, "d1_pair_saved": 0})
+        block["n"] += 1
+        base = sep_root / f"d{depth}" / split / str(row.get("uid"))
+        has_mix = (base / "mix.wav").is_file()
+        has_pair = (base / "d1_spk1.wav").is_file() and (base / "d1_spk2.wav").is_file()
+        block["mix_saved"] += int(has_mix)
+        block["d1_pair_saved"] += int(has_pair)
+        # 分离器报错时仍应保留 mix；否则要求完整 d1 双轨。
+        valid = has_mix and (bool(row.get("sep_failed")) or has_pair)
+        if not valid:
+            missing.append({
+                "uid": str(row.get("uid")), "split": split,
+                "decision": str(row.get("decision")), "dir": str(base),
+            })
+    return {
+        "sep_root": str(sep_root), "depth": depth,
+        "groups": groups, "missing_count": len(missing), "missing": missing[:100],
+    }
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="VE Presence-gated 提取")
     p.add_argument("--samples", type=Path, default=None)
@@ -119,6 +149,11 @@ def parse_args() -> argparse.Namespace:
         "--save-sep-wavs",
         action="store_true",
         help="保存分离中间轨到 VE_OUT/sep_streams/d{depth}/{split}/{uid}/",
+    )
+    p.add_argument(
+        "--strict-sep-wavs",
+        action="store_true",
+        help="保存中间轨时要求所有样本均有 mix 与 d1 双轨（separator 失败例外），否则返回非零",
     )
     p.add_argument(
         "--tse-backend",
@@ -614,6 +649,20 @@ def main() -> int:
             "thr_file": str(thr_file) if thr_file else None,
         },
     )
+    if sep_root is not None:
+        coverage = sep_cache_coverage(all_rows, ve_out / "sep_streams", actual_depth)
+        coverage_path = ve_out / "reports" / "sep_streams_coverage.json"
+        coverage_path.write_text(
+            json.dumps(coverage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(
+            f"[SEP_CACHE] groups={coverage['groups']} missing={coverage['missing_count']} "
+            f"→ {coverage_path}",
+            flush=True,
+        )
+        if args.strict_sep_wavs and coverage["missing_count"]:
+            print("[ERR] strict sep cache coverage failed", flush=True)
+            return 2
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"[OK] reports → {ve_out / 'reports'}")
     return 0
