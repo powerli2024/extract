@@ -9,7 +9,7 @@ PIPELINE / --tse-backend:
   mix         — CMD mix 直通 ASR（不做 TSE）
 
 产物:
-  VE_OUT/extracted/{split}/{uid}.wav
+  VE_OUT/extracted/{split}/{uid}__{routed_stream}.wav（sep_route/adaptive_route）
   VE_OUT/results/{split}_results.jsonl
   VE_OUT/reports/...
 """
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 import traceback
 from pathlib import Path
@@ -85,6 +86,16 @@ def normalize_backend(name: str) -> str:
             f"未知 --tse-backend={name!r}；可选: ps4 | wesep_bsrnn | sep_route | adaptive_route | mix | cond_tasnet"
         )
     return aliases[b]
+
+
+def extracted_filename(uid: str, backend: str, meta: dict[str, Any] | None) -> str:
+    """让分离选路产物携带实际选中的流名，避免 spk1/spk2 来源丢失。"""
+    if backend in {"sep_route", "adaptive_route"}:
+        stream = str((meta or {}).get("routed_stream") or "")
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", stream).strip("._")
+        if safe:
+            return f"{uid}__{safe}.wav"
+    return f"{uid}.wav"
 
 
 def parse_args() -> argparse.Namespace:
@@ -529,12 +540,13 @@ def main() -> int:
                             "best_start": int(pr.best_window["start"]),
                             "best_end": int(pr.best_window["end"]),
                         }
-                    out_path = extracted_dir / split / f"{uid}.wav"
+                    out_path = extracted_dir / split / extracted_filename(uid, backend, meta)
                     save_audio(out_path, out, sr)
                     rec["decision"] = "accept"
                     rec["reject_decision"] = False
                     rec["reject_reason"] = ""
                     rec["extracted_wav"] = str(out_path.resolve())
+                    rec["extracted_stream"] = (meta or {}).get("routed_stream")
                     rec["tse_meta"] = meta
                     rec["tse_ms"] = round((time.time() - t1) * 1000, 1)
                 except Exception as e:
