@@ -29,9 +29,11 @@ from audio_io import cosine_sim, load_audio, vad_crop_speech
 from calibrate_presence import stratified_limit, sweep_thresholds
 from paths import (
     default_campplus_dir,
+    default_ecapa_presence_dir,
     default_eres2net_dir,
     default_spk_chs_dir,
     default_vblink_dir,
+    default_vblink100_dir,
     default_ve_out,
     ensure_dir,
     normalize_presence_label,
@@ -143,8 +145,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument(
         "--encoders",
-        default="eres2netv2,campplus,resnet34_lm",
-        help="逗号分隔: eres2netv2,campplus,resnet34_lm,vblink2",
+        default="eres2netv2,campplus,ecapa_tdnn,vblink2_samresnet100",
+        help="逗号分隔: eres2netv2,campplus,ecapa_tdnn,resnet34_lm,vblink2,vblink2_samresnet100",
     )
     p.add_argument(
         "--arms",
@@ -155,6 +157,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--spk-chs-dir", type=Path, default=None)
     p.add_argument("--campplus-dir", type=Path, default=None)
     p.add_argument("--vblink-dir", type=Path, default=None)
+    p.add_argument("--ecapa-presence-dir", type=Path, default=None)
+    p.add_argument("--vblink100-dir", type=Path, default=None)
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--select-by", default="contest", choices=("contest", "frr"))
@@ -239,6 +243,10 @@ def main() -> int:
                 resnet_dir=args.spk_chs_dir or default_spk_chs_dir(),
                 campplus_dir=args.campplus_dir or default_campplus_dir(),
                 vblink_dir=args.vblink_dir or default_vblink_dir(),
+                ecapa_presence_dir=(
+                    args.ecapa_presence_dir or default_ecapa_presence_dir()
+                ),
+                vblink100_dir=args.vblink100_dir or default_vblink100_dir(),
                 device=args.device,
             )
         except Exception as e:

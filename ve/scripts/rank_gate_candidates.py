@@ -21,6 +21,10 @@ def main() -> int:
     p.add_argument("--candidate", action="append", required=True, help="NAME=优化报告目录")
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--top-k", type=int, default=3)
+    p.add_argument(
+        "--eligibility", choices=("delta", "coverage"), default="delta",
+        help="delta=要求相对同编码器基线的delta p05>0；coverage=跨编码器初筛，仅要求覆盖完整并按绝对holdout分排名",
+    )
     args = p.parse_args()
 
     rows: list[dict[str, Any]] = []
@@ -42,7 +46,10 @@ def main() -> int:
             threshold_mode = str(holdout.get("threshold_mode") or "lang_split")
             score = distributions.get("contest_score") or {}
             delta = distributions.get("score_delta_vs_baseline") or {}
-            stable = float(delta.get("p05", 0.0)) > 0.0
+            stable = (
+                True if args.eligibility == "coverage"
+                else float(delta.get("p05", 0.0)) > 0.0
+            )
             rows.append({
                 "kws": name,
                 "policy": policy,
@@ -76,7 +83,11 @@ def main() -> int:
     eligible = [r for r in rows if r["eligible"]]
     shortlist = eligible[: max(1, args.top_k)]
     payload = {
-        "ranking_contract": "coverage clean; paired delta p05>0; rank score p05 then mean",
+        "ranking_contract": (
+            "coverage clean; rank absolute holdout score p05 then mean"
+            if args.eligibility == "coverage"
+            else "coverage clean; paired delta p05>0; rank score p05 then mean"
+        ),
         "warning": "screening rank is not final score; shortlisted arms must run strict downstream evaluation",
         "n_rows": len(rows),
         "n_eligible": len(eligible),
@@ -91,7 +102,11 @@ def main() -> int:
     md = [
         "# KWS / Presence gate screening",
         "",
-        "Only coverage-clean candidates with paired holdout delta p05 > 0 are eligible.",
+        (
+            "Cross-encoder screen: coverage-clean candidates ranked by absolute holdout score; thresholds are encoder-specific."
+            if args.eligibility == "coverage"
+            else "Only coverage-clean candidates with paired holdout delta p05 > 0 are eligible."
+        ),
         "",
         "| rank | KWS | policy | thr mode | eligible | score p05 | score mean | delta p05 | RR | CER | FRR | zh thr p50 [p05,p95] |",
         "|---:|---|---|---|:---:|---:|---:|---:|---:|---:|---:|---:|",

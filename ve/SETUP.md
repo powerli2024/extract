@@ -66,6 +66,8 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 |------|----------------|
 | `ERES2NET_DIR` / `ERES_DIR` | `$VE_MODEL_DIR/eres2netv2_zh` |
 | `CAMPPLUS_DIR` | `$VE_MODEL_DIR/campplus_zh` |
+| `ECAPA_PRESENCE_DIR` | `$VE_MODEL_DIR/voxceleb_ecapa1024_LM`（Presence ECAPA-TDNN 对照） |
+| `VBLINK100_DIR` | `$VE_MODEL_DIR/vblink2_samresnet100`（多语强模型对照） |
 | `SPK_CHS_DIR` | `$VE_MODEL_DIR/cnceleb_resnet34_LM` |
 | `VBLINK_DIR` | `$VE_MODEL_DIR/vblink2_samresnet34`（可选） |
 | `PS4_WEIGHTS` | `$VE_MODEL_DIR/PS4/checkpoint_epoch037.pt` |

@@ -9,7 +9,14 @@ from typing import Any
 import numpy as np
 
 from audio_io import cosine_sim
-from paths import setup_sys_path
+from paths import (
+    default_campplus_dir,
+    default_ecapa_presence_dir,
+    default_spk_chs_dir,
+    default_vblink100_dir,
+    default_vblink_dir,
+    setup_sys_path,
+)
 
 setup_sys_path()
 
@@ -377,6 +384,8 @@ def create_presence_encoder(
     resnet_dir: str | Path | None = None,
     campplus_dir: str | Path | None = None,
     vblink_dir: str | Path | None = None,
+    ecapa_presence_dir: str | Path | None = None,
+    vblink100_dir: str | Path | None = None,
     device: str = "cuda:0",
 ) -> PresenceEncoder:
     backend = (backend or "eres2netv2").lower().strip()
@@ -410,21 +419,32 @@ def create_presence_encoder(
                     "装 modelscope 到当前 PYTHON_BIN，或显式 PRESENCE_BACKEND=resnet34_lm。"
                 ) from e
     if backend in ("campplus", "cam++", "campplus_zh"):
-        return CAMPlusEncoder(model_dir=campplus_dir or eres_dir, device=device)
-    if backend in ("vblink2", "vblink", "vblinkp", "samresnet34"):
-        if not vblink_dir:
-            raise FileNotFoundError(
-                "vblink2 需要 --vblink-dir（WeSpeaker VoxBlink2 SimAM-ResNet34 目录，"
-                "含 avg_model.pt + config.yaml）"
-            )
+        # 禁止用 eres_dir 兜底；旧逻辑会让 CAM++ 臂静默加载 ERes 权重。
+        return CAMPlusEncoder(
+            model_dir=campplus_dir or default_campplus_dir(), device=device
+        )
+    if backend in ("ecapa", "ecapa_tdnn", "ecapa1024", "ecapa1024_lm"):
         return WespeakerLocalEncoder(
-            vblink_dir, name="vblink2_samresnet34", device=device
+            ecapa_presence_dir or default_ecapa_presence_dir(),
+            name="ecapa1024_lm_voxceleb",
+            device=device,
+        )
+    if backend in ("vblink2", "vblink", "vblinkp", "samresnet34"):
+        return WespeakerLocalEncoder(
+            vblink_dir or default_vblink_dir(),
+            name="vblink2_samresnet34",
+            device=device,
+        )
+    if backend in ("vblink100", "vblink2_100", "samresnet100", "vblink2_samresnet100"):
+        return WespeakerLocalEncoder(
+            vblink100_dir or default_vblink100_dir(),
+            name="vblink2_samresnet100",
+            device=device,
         )
     if backend in ("resnet34", "resnet34_lm", "wespeaker"):
-        if not resnet_dir:
-            raise FileNotFoundError("ResNet34 需要 --spk-chs-dir / SPK_CHS_DIR")
-        return ResNet34Encoder(resnet_dir, device=device)
+        return ResNet34Encoder(resnet_dir or default_spk_chs_dir(), device=device)
     raise ValueError(
         f"未知 presence backend: {backend}；"
-        "可选: eres2netv2 | campplus | resnet34_lm | vblink2"
+        "可选: eres2netv2 | campplus | ecapa_tdnn | resnet34_lm | "
+        "vblink2 | vblink2_samresnet100"
     )

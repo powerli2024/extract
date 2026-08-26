@@ -4,6 +4,8 @@
 #   campplus    — ModelScope 中文轻量
 #   resnet34_lm — HF CNCeleb ResNet34-LM
 #   vblink2     — WeSpeaker VoxBlink2 SimAM-ResNet34（多语）
+#   ecapa_tdnn  — WeSpeaker VoxCeleb ECAPA-TDNN 1024 LM
+#   vblink100   — WeSpeaker VoxBlink2 SimAM-ResNet100（多语，重点对照）
 #
 # 用法:
 #   ./download_presence_encoders.sh
@@ -225,6 +227,46 @@ sys.exit(1)
 PY
 }
 
+# ---------- WeSpeaker 官方 zip：ECAPA / SimAM-ResNet100 ----------
+download_wespeaker_zip() {
+  local key="$1" version="$2" dst="$3"
+  mkdir -p "$dst"
+  if [[ -f "$dst/avg_model.pt" && -f "$dst/config.yaml" ]]; then
+    echo "[ OK ] $key 已存在 → $dst"
+    return 0
+  fi
+  echo "[INFO] 下载 $key: $version → $dst"
+  WS_DST="$dst" WS_VERSION="$version" WS_ZIP="$MODEL_DIR/_tmp_${key}.zip" \
+    "$PYTHON_BIN" - <<'PY'
+import os, shutil, urllib.request, zipfile
+from pathlib import Path
+
+dst = Path(os.environ["WS_DST"])
+version = os.environ["WS_VERSION"]
+zip_path = Path(os.environ["WS_ZIP"])
+url = f"https://wenet.org.cn/downloads?models=wespeaker&version={version}"
+dst.mkdir(parents=True, exist_ok=True)
+zip_path.unlink(missing_ok=True)
+req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+with urllib.request.urlopen(req, timeout=180) as src, zip_path.open("wb") as out:
+    shutil.copyfileobj(src, out)
+if zip_path.stat().st_size < 1_000_000 or zip_path.read_bytes()[:2] != b"PK":
+    raise SystemExit(f"下载不是有效 zip: {zip_path} size={zip_path.stat().st_size}")
+with zipfile.ZipFile(zip_path) as zf:
+    zf.extractall(dst)
+zip_path.unlink(missing_ok=True)
+pts = list(dst.rglob("avg_model.pt")) or list(dst.rglob("*.pt"))
+cfgs = list(dst.rglob("config.yaml"))
+if not (dst / "avg_model.pt").is_file() and pts:
+    shutil.copy2(pts[0], dst / "avg_model.pt")
+if not (dst / "config.yaml").is_file() and cfgs:
+    shutil.copy2(cfgs[0], dst / "config.yaml")
+if not ((dst / "avg_model.pt").is_file() and (dst / "config.yaml").is_file()):
+    raise SystemExit(f"模型包缺 avg_model.pt/config.yaml: {dst}")
+print(f"[ OK ] {version} → {dst}")
+PY
+}
+
 # ---------- run ----------
 fail=0
 if want eres2netv2; then
@@ -241,6 +283,14 @@ fi
 if want vblink2; then
   download_vblink2 || fail=1
 fi
+if want ecapa_tdnn; then
+  download_wespeaker_zip ecapa_tdnn "voxceleb_ECAPA1024_LM.zip" \
+    "$MODEL_DIR/voxceleb_ecapa1024_LM" || fail=1
+fi
+if want vblink100; then
+  download_wespeaker_zip vblink100 "voxblink2_samresnet100.zip" \
+    "$MODEL_DIR/vblink2_samresnet100" || fail=1
+fi
 
 echo
 echo "======= 路径（给 score_encoders_on_sep.sh）======="
@@ -249,9 +299,11 @@ echo "export ERES_DIR=$MODEL_DIR/eres2netv2_zh"
 echo "export CAMPPLUS_DIR=$MODEL_DIR/campplus_zh"
 echo "export SPK_CHS_DIR=$MODEL_DIR/cnceleb_resnet34_LM"
 echo "export VBLINK_DIR=$MODEL_DIR/vblink2_samresnet34"
+echo "export ECAPA_PRESENCE_DIR=$MODEL_DIR/voxceleb_ecapa1024_LM"
+echo "export VBLINK100_DIR=$MODEL_DIR/vblink2_samresnet100"
 echo
 echo "若只要补 vblink2:  ONLY=vblink2 bash ./download_presence_encoders.sh"
-echo "ENCODERS=eres2netv2,campplus,resnet34_lm,vblink2 bash ./score_encoders_on_sep.sh"
+echo "ENCODERS=eres2netv2,campplus,ecapa_tdnn,vblink2_samresnet100 bash ./score_encoders_on_sep.sh"
 echo
 
 if [[ "$fail" == "1" ]]; then

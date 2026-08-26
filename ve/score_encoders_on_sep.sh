@@ -17,7 +17,7 @@ else
 fi
 SAMPLES="${SAMPLES:-}"
 SEP_ROOT="${SEP_ROOT:-}"
-ENCODERS="${ENCODERS:-eres2netv2,campplus,resnet34_lm}"
+ENCODERS="${ENCODERS:-eres2netv2,campplus,ecapa_tdnn,vblink2_samresnet100}"
 ARMS="${ARMS:-no_sep,sep_once,sep_multi}"
 
 mkdir -p "$OUT"
@@ -79,10 +79,14 @@ ERES_DIR="${ERES_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/eres2netv2_zh}
 CAMPPLUS_DIR="${CAMPPLUS_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/campplus_zh}"
 SPK_CHS_DIR="${SPK_CHS_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/cnceleb_resnet34_LM}"
 VBLINK_DIR="${VBLINK_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/vblink2_samresnet34}"
+ECAPA_PRESENCE_DIR="${ECAPA_PRESENCE_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/voxceleb_ecapa1024_LM}"
+VBLINK100_DIR="${VBLINK100_DIR:-${VE_MODEL_DIR:-/root/autodl-tmp/ve_models}/vblink2_samresnet100}"
 ARGS+=(--eres-dir "$ERES_DIR")
 ARGS+=(--campplus-dir "$CAMPPLUS_DIR")
 ARGS+=(--spk-chs-dir "$SPK_CHS_DIR")
 [[ -d "$VBLINK_DIR" ]] && ARGS+=(--vblink-dir "$VBLINK_DIR")
+[[ -d "$ECAPA_PRESENCE_DIR" ]] && ARGS+=(--ecapa-presence-dir "$ECAPA_PRESENCE_DIR")
+[[ -d "$VBLINK100_DIR" ]] && ARGS+=(--vblink100-dir "$VBLINK100_DIR")
 
 "$PYTHON_BIN" "$ROOT/scripts/score_encoders_on_sep.py" "${ARGS[@]}"
 

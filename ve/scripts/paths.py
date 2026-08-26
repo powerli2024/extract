@@ -231,6 +231,22 @@ def default_campplus_dir() -> Path:
     return (default_model_dir() / "campplus_zh").resolve()
 
 
+def default_ecapa_presence_dir() -> Path:
+    """WeSpeaker VoxCeleb ECAPA-TDNN 1024 LM（Presence 对照臂）。"""
+    env = os.environ.get("ECAPA_PRESENCE_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return (default_model_dir() / "voxceleb_ecapa1024_LM").resolve()
+
+
+def default_vblink100_dir() -> Path:
+    """WeSpeaker VoxBlink2 SimAM-ResNet100 多语模型。"""
+    env = os.environ.get("VBLINK100_DIR", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return (default_model_dir() / "vblink2_samresnet100").resolve()
+
+
 def default_cond_tasnet_ckpt() -> Path:
     env = os.environ.get("COND_TASNET_CKPT", "").strip()
     if env:
