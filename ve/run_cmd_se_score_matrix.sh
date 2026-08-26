@@ -8,7 +8,7 @@ SCREEN_ARM="${SCREEN_ARM:-}"
 SEP_REUSE_ROOT="${SEP_REUSE_ROOT:-}"
 OUT_ROOT="${CMD_SE_EXP_ROOT:-/root/autodl-tmp/ve_systematic/cmd_se}"
 CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/autodl-tmp/ClearerVoice-Studio}"
-CMD_SE_ARMS="${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better}"
+CMD_SE_ARMS="${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,mix_top_se48k:raw:best,raw:se48k:better,se48k:se48k:better}"
 CMD_SE_POLICIES="${CMD_SE_POLICIES:-max}"
 [[ -f "$SCREEN_ARM/manifest/samples.jsonl" && -f "$SCREEN_ARM/results/all_results.jsonl" ]] || {
   echo "[ERR] SCREEN_ARM 缺少 manifest/results: $SCREEN_ARM" >&2; exit 2;
@@ -39,16 +39,29 @@ for arm_spec in "${ARMS[@]}"; do
     slot="${arm_spec##*_}"
   fi
   case "$gate_condition:$audio_condition:$slot" in
-    raw:raw:best|raw:raw:better|raw:se48k:best|raw:se48k:better|se48k:raw:best|se48k:raw:better|se48k:se48k:best|se48k:se48k:better) ;;
+    raw:raw:best|raw:raw:better|raw:se48k:best|raw:se48k:better|se48k:raw:best|se48k:raw:better|se48k:se48k:best|se48k:se48k:better|mix_top_se48k:raw:best) ;;
     *) echo "[ERR] invalid CMD_SE arm=$arm_spec" >&2; exit 2 ;;
   esac
   arm="${gate_condition}gate_${audio_condition}_${slot}"
   arm_root="$OUT_ROOT/arms/$arm"
-  asr_root="$arm_root/all_pos_asr"
+  # ASR 音频只由 audio_condition + slot 决定，与 gate_condition 无关。
+  # 优先复用任一旧门控臂的同音频结果，避免新门控策略重复转写 1364 条。
+  asr_root=""
+  for legacy_asr in "$OUT_ROOT"/arms/*gate_"${audio_condition}_${slot}"/all_pos_asr; do
+    if [[ -f "$legacy_asr/results/all_results.jsonl" \
+          && -f "$legacy_asr/reports/asr_cer/asr_results.jsonl" ]]; then
+      asr_root="$legacy_asr"
+      break
+    fi
+  done
+  if [[ -z "$asr_root" ]]; then
+    asr_root="$OUT_ROOT/shared_asr/${audio_condition}_${slot}"
+  fi
   gate_rows="$arm_root/gate_decisions.jsonl"
   gate_opt="$arm_root/gate_opt"
   eval_root="$arm_root/eval"
   echo ">>> CMD-SE arm=$arm (gate=$gate_condition audio=$audio_condition slot=$slot)"
+  echo "[INFO] shared ASR root=$asr_root"
   "$PYTHON_BIN" "$ROOT/scripts/prepare_cmd_se_asr_arm.py" \
     --samples "$SCREEN_ARM/manifest/samples.jsonl" --cmd-se-results "$CMD_SE_RESULTS" \
     --condition "$audio_condition" --slot "$slot" --out-dir "$asr_root" --strict

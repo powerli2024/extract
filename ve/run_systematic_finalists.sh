@@ -117,12 +117,12 @@ for spec in "${ITEMS[@]}"; do
     cmd_se_root="$arm_root/cmd_se"
     SCREEN_ARM="$screen_arm" SEP_REUSE_ROOT="${SEP_REUSE_ROOT:-}" \
       CMD_SE_EXP_ROOT="$cmd_se_root" \
-      CMD_SE_ARMS="${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better}" \
+      CMD_SE_ARMS="${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,mix_top_se48k:raw:best,raw:se48k:better,se48k:se48k:better}" \
       CMD_SE_POLICIES="$policy" CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-/root/autodl-tmp/ClearerVoice-Studio}" \
       SEEDS="${SEEDS:-200}" HOLDOUT_FRAC="${HOLDOUT_FRAC:-0.30}" \
       THRESHOLD_MODES="${THRESHOLD_MODES:-global,lang_split}" \
       bash "$ROOT/run_cmd_se_score_matrix.sh"
-    IFS=',' read -r -a SE_ARMS <<< "${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,raw:se48k:better,se48k:se48k:better}"
+    IFS=',' read -r -a SE_ARMS <<< "${CMD_SE_ARMS:-raw:raw:best,raw:se48k:best,se48k:raw:best,se48k:se48k:best,mix_top_se48k:raw:best,raw:se48k:better,se48k:se48k:better}"
     for se_spec in "${SE_ARMS[@]}"; do
       if [[ "$se_spec" == *:*:* ]]; then
         IFS=':' read -r gate_cond audio_cond slot <<< "$se_spec"
