@@ -58,6 +58,27 @@ mkdir -p /root/autodl-tmp/pos_neg
 ln -sfn /root/autodl-tmp/kws_sep/best_sep /root/autodl-tmp/pos_neg/best_sep
 ```
 
+### 全量重跑并充分审计（推荐）
+
+KWS 中文指标固定为**无调拼音 CER**，英文为字符 CER；不采用比赛严格中文字符 CER。
+短唤醒词的拼音 CER 很离散，若 P50/P75/P90 选择相同 UID 集合，门控只运行首个
+`thr_a/b/c`，其余在 summary 中写为 `duplicate_of`，不会重复分离和 ASR。
+
+不做小规模测试，直接使用新的输出树全量运行：
+
+```bash
+cd /root/extract-sep
+source ./env.sh
+export VM_OUT=/root/autodl-tmp/kws_sep_dedup
+export OLD_VM_OUT=/root/autodl-tmp/kws_sep
+bash ./rerun_and_audit.sh --full
+```
+
+旧 `kws_sep` 不会被删除或混入新 index。若新目录中已有中断结果，只复用该新目录
+内签名一致的成功 UID 并继续补齐。完成条件包括：1,838 UID、s1–s8 index/WAV
+完整、中文 metric=pinyin、门控别名一致、best_sep WAV 完整；若 `/root/kws`
+已同步，还会自动生成全阶段去重比较、同 ID 音频排行及旧/新 best_sep 对照。
+
 然后 kws：
 
 ```bash

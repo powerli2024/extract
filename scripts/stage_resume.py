@@ -157,6 +157,23 @@ def _gated_complete(vm_out: Path, stage: str, split: str, summary: dict) -> bool
         info = by.get(name) or {}
         if n_exp <= 0:
             continue
+        duplicate_of = str(info.get("duplicate_of") or "").strip()
+        if duplicate_of:
+            canonical = by.get(duplicate_of) or {}
+            canonical_ip = Path(canonical.get("index") or "") if canonical.get("index") else root / f"thr_{duplicate_of}" / "index.jsonl"
+            if not canonical_ip.is_file():
+                canonical_ip = root / f"thr_{duplicate_of}" / "index.jsonl"
+            if not canonical_ip.is_file():
+                return False
+            canonical_exp = sum(
+                1 for r in parent_ok if float(r["oracle_cer"]) >= float(thr_map[duplicate_of])
+            )
+            if canonical_exp != n_exp:
+                return False
+            total, ok = count_index_rows(canonical_ip)
+            if ok < n_exp or total > ok:
+                return False
+            continue
         ip = Path(info.get("index") or "") if info.get("index") else root / f"thr_{name}" / "index.jsonl"
         if not ip.is_file():
             ip = root / f"thr_{name}" / "index.jsonl"

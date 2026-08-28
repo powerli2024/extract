@@ -55,9 +55,29 @@ def discover_indexes(split_root: Path) -> list[tuple[str, Path]]:
         idx = child / "index.jsonl"
         if idx.is_file():
             found.append((child.name, idx))
+        seen_thr_cohorts: dict[tuple[str, ...], str] = {}
         for thr in sorted(child.glob("thr_*")):
             tidx = thr / "index.jsonl"
             if thr.is_dir() and tidx.is_file():
+                # Legacy runs may contain independently rerun thr_a/thr_b with
+                # the same selected UIDs. Keep the first cohort only; otherwise
+                # copied audio and stochastic ASR scores are double-counted.
+                cohort = tuple(
+                    sorted(
+                        str(row.get("uid") or "")
+                        for row in load_jsonl(tidx)
+                        if row.get("uid") and not row.get("error") and row.get("oracle_cer") is not None
+                    )
+                )
+                duplicate_of = seen_thr_cohorts.get(cohort)
+                if duplicate_of is not None:
+                    print(
+                        f"[SKIP-DUP] {child.name}/{thr.name} same UID cohort as "
+                        f"{child.name}/{duplicate_of}",
+                        flush=True,
+                    )
+                    continue
+                seen_thr_cohorts[cohort] = thr.name
                 found.append((f"{child.name}/{thr.name}", tidx))
     return found
 

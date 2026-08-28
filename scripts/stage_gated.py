@@ -26,6 +26,7 @@ from paths import (
 )
 from progress_log import StageProgress
 from report_cer_dist import compute_dist, report_from_index
+from gate_policy import build_gate_plan
 from sep_common import close_sep, separate_batch_resilient, separate_one_with_oom_retry
 from stage_resume import (
     count_index_rows,
@@ -291,7 +292,21 @@ def _run_thr_subset(
 
 def _gated_has_fails(vm_out: Path, stage: str, split: str) -> bool:
     root = stage_dir(vm_out, stage, split)
+    aliases: set[str] = set()
+    summary_path = root / "summary.json"
+    if summary_path.is_file():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            aliases = {
+                str(name)
+                for name, info in (summary.get("by_thr") or {}).items()
+                if isinstance(info, dict) and info.get("duplicate_of")
+            }
+        except Exception:
+            aliases = set()
     for name in THR_NAMES:
+        if name in aliases:
+            continue
         ip = root / f"thr_{name}" / "index.jsonl"
         if not ip.is_file():
             continue
@@ -336,10 +351,32 @@ def run_gated(stage: str, vm_out: Path, split: str, args: argparse.Namespace) ->
     parent_root = stage_dir(vm_out, parent, split)
     use_cv = cfg["sep"] == "cv"
 
+    gate_plan = build_gate_plan(rows, thr_map)
     by_thr = {}
     for name in THR_NAMES:
-        thr_val = float(thr_map[name])
-        sub = _subset(rows, thr_val)
+        item = gate_plan[name]
+        thr_val = float(item["thr"])
+        sub = item["rows"]
+        duplicate_of = item["duplicate_of"]
+        if duplicate_of is not None:
+            canonical = by_thr[duplicate_of]
+            by_thr[name] = {
+                "thr_name": name,
+                "thr": thr_val,
+                "n_subset": len(sub),
+                "n_ok": canonical.get("n_ok", 0),
+                "n_fail": canonical.get("n_fail", 0),
+                "duplicate_of": duplicate_of,
+                "skipped_duplicate": True,
+                "index": canonical.get("index"),
+                "reason": "same_uid_cohort_under_discrete_pinyin_cer",
+            }
+            print(
+                f"[SKIP-DUP] {split}/{stage} thr_{name}={thr_val} "
+                f"same UID cohort as thr_{duplicate_of} n={len(sub)}",
+                flush=True,
+            )
+            continue
         sub_dir = stage_root / f"thr_{name}"
         sub_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n=== {split}/{stage} thr_{name}={thr_val} n={len(sub)} ===")
@@ -390,6 +427,12 @@ def run_gated(stage: str, vm_out: Path, split: str, args: argparse.Namespace) ->
         "sep_backend": cfg["sep"],
         "thr": thr_map,
         "by_thr": by_thr,
+        "gate_dedup": {
+            "metric": "pinyin_cer_for_zh_char_cer_for_en",
+            "policy": "same_uid_cohort_keep_first_a_b_c",
+            "n_unique_cohorts": sum(1 for item in gate_plan.values() if item["duplicate_of"] is None),
+            "aliases": {name: item["duplicate_of"] for name, item in gate_plan.items() if item["duplicate_of"] is not None},
+        },
         "catalog_n": int(catalog_n),
         "limit": int(args.limit or 0),
         "partial": bool(args.limit and int(args.limit) > 0),

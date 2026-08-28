@@ -20,6 +20,7 @@ from sep_common import (  # noqa: E402
     split_two_speaker_wav,
 )
 from stage_resume import stage_complete  # noqa: E402
+from gate_policy import build_gate_plan  # noqa: E402
 
 
 def test_split_two_speaker_batch_speakers_time() -> None:
@@ -49,6 +50,30 @@ def test_oom_retry_sec_unified() -> None:
     assert oom_retry_sec(6.0) == 3.0
     assert oom_retry_sec(3.0) == 2.0
     assert oom_retry_sec(2.0) == 2.0
+
+
+def test_kws_chinese_uses_pinyin_cer_not_strict_char_cer() -> None:
+    try:
+        from cer_pinyin import cer_value
+    except ModuleNotFoundError as exc:
+        if exc.name == "editdistance":
+            return  # setup_env/check_env enforce this runtime dependency.
+        raise
+    assert cer_value("科目", "科慕", use_pinyin=True) == 0.0
+    assert cer_value("科目", "科慕", use_pinyin=False) > 0.0
+
+
+def test_gate_plan_deduplicates_same_uid_cohort() -> None:
+    rows = [
+        {"uid": f"pos_{i}", "oracle_cer": 0.0 if i < 19 else 0.25}
+        for i in range(20)
+    ]
+    plan = build_gate_plan(rows, {"a": 0.0, "b": 0.0, "c": 0.025})
+    assert plan["a"]["duplicate_of"] is None
+    assert plan["b"]["duplicate_of"] == "a"
+    assert plan["c"]["duplicate_of"] is None
+    assert len(plan["a"]["rows"]) == 20
+    assert len(plan["c"]["rows"]) == 1
 
 
 class _Sep:
@@ -169,6 +194,45 @@ def test_gated_recompute_parent_even_without_partial_flag() -> None:
             encoding="utf-8",
         )
         assert stage_complete(tmp_path, "s5", "pos", 1, gated=True) is False
+
+
+def test_gated_duplicate_alias_uses_canonical_index_for_completion() -> None:
+    os.environ["VM_SKIP_DONE"] = "1"
+    os.environ.pop("VM_FORCE", None)
+    with tempfile.TemporaryDirectory() as td:
+        tmp_path = Path(td)
+        parent = tmp_path / "pos" / "s1_onnx_full"
+        parent.mkdir(parents=True)
+        parent_rows = [
+            {"uid": "pos_0", "oracle_cer": 0.0},
+            {"uid": "pos_1", "oracle_cer": 0.5},
+            {"uid": "pos_2", "oracle_cer": 1.0},
+        ]
+        (parent / "index.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in parent_rows), encoding="utf-8"
+        )
+        gated = tmp_path / "pos" / "s5_onnx_then_cv_gate"
+        a = gated / "thr_a"
+        c = gated / "thr_c"
+        a.mkdir(parents=True)
+        c.mkdir(parents=True)
+        (a / "index.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in parent_rows), encoding="utf-8"
+        )
+        (c / "index.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in parent_rows[1:]), encoding="utf-8"
+        )
+        summary = {
+            "parent_stage": "s1", "catalog_n": 3, "limit": 0, "partial": False,
+            "thr": {"a": 0.0, "b": 0.0, "c": 0.5},
+            "by_thr": {
+                "a": {"n_subset": 3, "index": str(a / "index.jsonl")},
+                "b": {"n_subset": 3, "duplicate_of": "a", "index": str(a / "index.jsonl")},
+                "c": {"n_subset": 2, "index": str(c / "index.jsonl")},
+            },
+        }
+        (gated / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+        assert stage_complete(tmp_path, "s5", "pos", 1, gated=True) is True
 
 
 if __name__ == "__main__":

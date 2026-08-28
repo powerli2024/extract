@@ -76,6 +76,16 @@ def _stage_stats(vm_out: Path, split: str, stage: str) -> dict[str, Any] | None:
     elif "by_thr" in summary:
         thr_stats = {}
         for name, info in summary.get("by_thr", {}).items():
+            duplicate_of = info.get("duplicate_of")
+            if duplicate_of:
+                thr_stats[name] = {
+                    "thr": info.get("thr"),
+                    "n_subset": info.get("n_subset"),
+                    "duplicate_of": duplicate_of,
+                    "skipped_duplicate": True,
+                    "reason": info.get("reason"),
+                }
+                continue
             ip = Path(info.get("index", "")) if info.get("index") else root / f"thr_{name}" / "index.jsonl"
             rows = _load_index(ip)
             cers = _cers(rows)
@@ -198,6 +208,12 @@ def render_md(report: dict[str, Any]) -> str:
                 thr = st.get("summary", {}).get("thr", {})
                 lines.append(f"- thr a/b/c = {thr}")
                 for tn, ts in st["by_thr"].items():
+                    if ts.get("duplicate_of"):
+                        lines.append(
+                            f"- **thr_{tn}** thr={ts.get('thr')} duplicates "
+                            f"thr_{ts.get('duplicate_of')} (same UID cohort; not rerun)"
+                        )
+                        continue
                     lines.append(f"- **thr_{tn}** thr={ts.get('thr')} n_subset={ts.get('n_subset')}")
                     lines += _md_dist(ts.get("dist"), "  ")
                     lines.append("  - vs parent:")
