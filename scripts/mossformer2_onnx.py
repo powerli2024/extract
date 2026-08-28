@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils_audio import load_audio, peak_normalize, save_audio, truncate_wav
+from utils_audio import load_audio, peak_normalize, save_audio
 
 # ── ONNX Runtime 懒加载 ──
 _ORT_AVAILABLE = False
@@ -348,8 +348,6 @@ class MossFormer2Separator:
         (spk1, spk2) : tuple[np.ndarray, np.ndarray]
         """
         wav = peak_normalize(np.asarray(wav, dtype=np.float32), peak=self.peak)
-        if max_sec and max_sec > 0:
-            wav = truncate_wav(wav, sr=sr, max_sec=max_sec, mode="energy")
         session = self._get_session()
         return self._run_onnx(session, wav)
 
@@ -432,8 +430,6 @@ class MossFormer2Separator:
             for w in wavs:
                 try:
                     w_proc = peak_normalize(np.asarray(w, dtype=np.float32), peak=self.peak)
-                    if max_sec and max_sec > 0:
-                        w_proc = truncate_wav(w_proc, sr=sr, max_sec=max_sec, mode="energy")
                     out.append(self._run_onnx(session, w_proc))
                 except Exception as e:
                     out.append(e)
@@ -446,8 +442,6 @@ class MossFormer2Separator:
             i, w = idx_and_wav
             try:
                 w_proc = peak_normalize(np.asarray(w, dtype=np.float32), peak=self.peak)
-                if max_sec and max_sec > 0:
-                    w_proc = truncate_wav(w_proc, sr=sr, max_sec=max_sec, mode="energy")
                 session = self._get_session()
                 return (i, self._run_onnx(session, w_proc))
             except Exception as e:

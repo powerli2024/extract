@@ -54,26 +54,6 @@ def emit(obj):
     _PROTO_OUT.write(json.dumps(obj) + "\n")
     _PROTO_OUT.flush()
 
-def truncate_energy(audio, sr, max_sec):
-    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-    max_n = int(max(0.5, float(max_sec)) * int(sr))
-    if len(audio) <= max_n:
-        return audio
-    hop = max(1, max_n // 4)
-    best_i, best_e = 0, -1.0
-    for i in range(0, len(audio) - max_n + 1, hop):
-        seg = audio[i:i + max_n]
-        e = float(np.dot(seg, seg))
-        if e > best_e:
-            best_e, best_i = e, i
-    tail = len(audio) - max_n
-    if tail > 0:
-        seg = audio[tail:]
-        e = float(np.dot(seg, seg))
-        if e > best_e:
-            best_i = tail
-    return audio[best_i:best_i + max_n].copy()
-
 def split_two_speaker(arr):
     raw = tuple(np.asarray(arr).shape)
     a = np.asarray(arr)
@@ -183,8 +163,6 @@ def separate_one(cv, wav_path, out1, out2, sr, max_sec=0):
     if int(file_sr) != int(sr):
         audio = librosa.resample(audio.astype(np.float32), orig_sr=file_sr, target_sr=sr)
     audio = np.asarray(audio, dtype=np.float32)
-    if max_sec and max_sec > 0:
-        audio = truncate_energy(audio, sr, max_sec)
     if audio.ndim == 1:
         audio = audio.reshape(1, -1)
 
@@ -280,7 +258,7 @@ def main():
                         })
                 emit({"ok": True, "event": "batch", "results": results})
                 continue
-            # 可选限长，降低长音频 OOM
+            # max_sec 仅保留协议兼容；separate_one 始终处理完整音频。
             max_sec = float(req.get("max_sec", 0) or 0)
             separate_one(
                 cv,
@@ -666,10 +644,6 @@ class MossFormer2Separator:
     def _separate_inprocess(
         self, wav: np.ndarray, sr: int, max_sec: float = 0.0
     ) -> tuple[np.ndarray, np.ndarray]:
-        if max_sec and max_sec > 0:
-            from utils_audio import truncate_wav
-
-            wav = truncate_wav(wav, sr=sr, max_sec=max_sec, mode="energy")
         audio = wav.reshape(1, -1).astype(np.float32)
         output_wav = self._cv(audio, False)
         arr = np.asarray(output_wav)

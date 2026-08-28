@@ -144,7 +144,8 @@ fi
 LIMIT=0
 THR=""
 PEAK=0.7
-MAX_SEP_SEC=6
+# Compatibility only. Formal inference always uses the complete utterance.
+MAX_SEP_SEC=0
 DEVICE=cuda:0
 SPLITS="${SPLITS:-pos,neg}"
 SPLIT_ONE=""

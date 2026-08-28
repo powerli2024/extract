@@ -15,6 +15,8 @@ import json
 import os
 from pathlib import Path
 
+import soundfile as sf
+
 from asr_score import create_asr, score_wavs
 from collect_kws import load_items
 from paths import (
@@ -38,7 +40,7 @@ from stage_resume import (
 )
 
 setup_sys_path()
-from utils_audio import load_audio, peak_normalize, save_audio, truncate_wav  # noqa: E402
+from utils_audio import load_audio, peak_normalize, save_audio  # noqa: E402
 
 
 def _sep_batch_size(backend: str) -> int:
@@ -75,6 +77,16 @@ def run_full_sep(
     only_failed = retry_failed()
     todo, keep = partition_items(items, existing, only_failed=only_failed)
 
+    # Keep all worker slots busy with similarly sized utterances.  `order` above
+    # remains the stable output/index order, so this only changes execution order.
+    def duration_key(it: dict) -> float:
+        try:
+            return float(sf.info(str(it["kws_path"])).duration)
+        except Exception:
+            return float("inf")
+
+    todo.sort(key=duration_key)
+
     if not todo:
         print(
             f"[SKIP] {split}/{stage} 无待办（成功 {len(keep)}/{len(items)}）。"
@@ -110,7 +122,8 @@ def run_full_sep(
     prog = StageProgress(len(todo), f"{split}/{stage}-sep")
     batch_n = _sep_batch_size(backend)
     print(
-        f"[INFO] {split}/{stage} phase1=separate sep_batch={batch_n} backend={backend}",
+        f"[INFO] {split}/{stage} phase1=separate sep_batch={batch_n} "
+        f"backend={backend} schedule=duration_sorted_full_audio",
         flush=True,
     )
 
@@ -124,10 +137,6 @@ def run_full_sep(
             try:
                 raw, sr = load_audio(it["kws_path"], 16000)
                 peak_wav = peak_normalize(raw, peak=peak)
-                if max_sep_sec > 0:
-                    peak_wav = truncate_wav(
-                        peak_wav, sr=sr, max_sec=max_sep_sec, mode="energy"
-                    )
                 prepared.append((it, peak_wav, sr))
             except Exception as e:
                 prepared.append((it, e, 16000))
@@ -284,7 +293,10 @@ def main() -> None:
     ap.add_argument("--vm-out", type=str, default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--peak", type=float, default=0.7)
-    ap.add_argument("--max-sep-sec", type=float, default=6.0)
+    ap.add_argument(
+        "--max-sep-sec", type=float, default=0.0,
+        help="deprecated compatibility option; full utterances are always preserved",
+    )
     ap.add_argument("--device", type=str, default="cuda:0")
     ap.add_argument("--asr-model-dir", type=str, default=os.environ.get("ASR_MODEL_DIR", ""))
     ap.add_argument("--force", action="store_true", help="强制全量重跑并覆盖")

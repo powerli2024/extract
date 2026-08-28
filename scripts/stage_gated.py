@@ -452,7 +452,10 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--thr", type=str, default="", help="a,b,c override")
     ap.add_argument("--peak", type=float, default=0.7)
-    ap.add_argument("--max-sep-sec", type=float, default=6.0)
+    ap.add_argument(
+        "--max-sep-sec", type=float, default=0.0,
+        help="deprecated compatibility option; full utterances are always preserved",
+    )
     ap.add_argument("--device", type=str, default="cuda:0")
     ap.add_argument("--asr-model-dir", type=str, default=os.environ.get("ASR_MODEL_DIR", ""))
     ap.add_argument("--force", action="store_true")

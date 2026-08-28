@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import soundfile as sf
+
 from gate_policy import build_gate_plan
 from paths import STAGE_DIRS, THR_NAMES, VALID_SPLITS, stage_dir
 
@@ -28,7 +30,7 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
 def check_index(path: Path, *, check_wav: bool = True) -> dict[str, Any]:
     rows = load_rows(path)
     seen: set[str] = set()
-    errors = metric_errors = missing_wav = 0
+    errors = metric_errors = missing_wav = duration_errors = 0
     for row in rows:
         uid = str(row.get("uid") or "")
         if not uid or uid in seen:
@@ -41,13 +43,29 @@ def check_index(path: Path, *, check_wav: bool = True) -> dict[str, Any]:
         if row.get("metric") != expected_metric:
             metric_errors += 1
         if check_wav:
+            source = Path(str(row.get("kws_path") or ""))
+            try:
+                source_duration = float(sf.info(str(source)).duration)
+            except Exception:
+                source_duration = None
             for stream in (row.get("streams") or {}):
                 tag = "peak" if stream == "original" else str(stream)
-                if not (path.parent / "wav" / f"{uid}_{tag}.wav").is_file():
+                wav = path.parent / "wav" / f"{uid}_{tag}.wav"
+                if not wav.is_file():
                     missing_wav += 1
+                elif source_duration is None:
+                    duration_errors += 1
+                else:
+                    try:
+                        # Resampling/codec tail rounding is allowed; content loss is not.
+                        if abs(float(sf.info(str(wav)).duration) - source_duration) > 0.020:
+                            duration_errors += 1
+                    except Exception:
+                        duration_errors += 1
     return {
         "path": str(path.resolve()), "n_rows": len(rows), "n_uid": len(seen),
-        "n_errors": errors, "n_metric_errors": metric_errors, "n_missing_wav": missing_wav,
+        "n_errors": errors, "n_metric_errors": metric_errors,
+        "n_missing_wav": missing_wav, "n_duration_errors": duration_errors,
     }
 
 
@@ -71,7 +89,7 @@ def main() -> int:
             path = stage_dir(args.vm_out, key, split) / "index.jsonl"
             stat = check_index(path)
             block["stages"][key] = stat
-            if not path.is_file() or stat["n_errors"] or stat["n_metric_errors"] or stat["n_missing_wav"]:
+            if not path.is_file() or stat["n_errors"] or stat["n_metric_errors"] or stat["n_missing_wav"] or stat["n_duration_errors"]:
                 report["failures"].append({"split": split, "stage": key, "stat": stat})
         for key in ("s5", "s6", "s7", "s8"):
             root = stage_dir(args.vm_out, key, split)
@@ -93,10 +111,10 @@ def main() -> int:
                 if item["duplicate_of"]:
                     gate["thresholds"][name] = {"duplicate_of": item["duplicate_of"], "n_expected": len(item["rows"])}
                     continue
-                stat = check_index(root / f"thr_{name}" / "index.jsonl") if item["rows"] else {"n_rows": 0, "n_uid": 0, "n_errors": 0, "n_metric_errors": 0, "n_missing_wav": 0}
+                stat = check_index(root / f"thr_{name}" / "index.jsonl") if item["rows"] else {"n_rows": 0, "n_uid": 0, "n_errors": 0, "n_metric_errors": 0, "n_missing_wav": 0, "n_duration_errors": 0}
                 stat["n_expected"] = len(item["rows"])
                 gate["thresholds"][name] = stat
-                if stat["n_uid"] != len(item["rows"]) or stat["n_errors"] or stat["n_metric_errors"] or stat["n_missing_wav"]:
+                if stat["n_uid"] != len(item["rows"]) or stat["n_errors"] or stat["n_metric_errors"] or stat["n_missing_wav"] or stat["n_duration_errors"]:
                     report["failures"].append({"split": split, "stage": f"{key}/thr_{name}", "stat": stat})
             block["stages"][key] = gate
         report["splits"][split] = block

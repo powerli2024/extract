@@ -1,4 +1,4 @@
-"""Shared BSS helpers: OOM retry, speaker-unpack, GPU release.
+"""Shared BSS helpers: lossless full-utterance inference and GPU release.
 
 Used by s1–s8 so cascade / full / gated do not drift.
 """
@@ -10,26 +10,9 @@ from typing import Any
 
 import numpy as np
 
-from utils_audio import truncate_wav
-
-
 def is_oom(err: BaseException | str) -> bool:
     s = str(err).lower()
     return "out of memory" in s or "oom" in s or "cudaerrormemoryallocation" in s
-
-
-def oom_retry_sec(max_sep_sec: float) -> float:
-    """Unified OOM fallback length (seconds).
-
-    max_sep_sec<=0 means 'no pre-truncate' on the first try; retry still
-    uses 3s energy window. If the first try was already <=3s, cut to 2s.
-    """
-    shorter = 3.0
-    if max_sep_sec > 0:
-        shorter = min(float(max_sep_sec), 3.0)
-        if shorter >= float(max_sep_sec) - 1e-6:
-            shorter = min(shorter, 2.0)
-    return float(shorter)
 
 
 def empty_cache(sep: Any) -> None:
@@ -89,19 +72,55 @@ def split_two_speaker_wav(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return s1, s2
 
 
+def _exact_length_pair(
+    out: Any, n_samples: int, sr: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Require two streams and preserve the complete input time axis.
+
+    A model may differ by a few tail samples because of convolution padding.  We
+    only trim/pad the *model output* to the input length; input audio is never
+    cropped.  A large mismatch is treated as a bad model result.
+    """
+    if not isinstance(out, (tuple, list)) or len(out) != 2:
+        raise RuntimeError(f"separator must return two streams, got {type(out).__name__}")
+    fixed = []
+    tolerance = max(32, int(float(sr) * 0.020))
+    for i, stream in enumerate(out, 1):
+        w = np.asarray(stream, dtype=np.float32).reshape(-1)
+        if not np.all(np.isfinite(w)):
+            raise RuntimeError(f"spk{i} contains non-finite samples")
+        if abs(len(w) - n_samples) > tolerance:
+            raise RuntimeError(
+                f"spk{i} length mismatch: output={len(w)} input={n_samples} "
+                f"(refuse possible truncation)"
+            )
+        if len(w) < n_samples:
+            w = np.pad(w, (0, n_samples - len(w)))
+        elif len(w) > n_samples:
+            w = w[:n_samples]
+        fixed.append(w.astype(np.float32, copy=False))
+    return fixed[0], fixed[1]
+
+
 def separate_one_with_oom_retry(sep: Any, wav: np.ndarray, sr: int, max_sep_sec: float):
+    """Separate a complete utterance; OOM retry never shortens the input.
+
+    ``max_sep_sec`` is accepted for CLI compatibility but deliberately ignored.
+    It used to energy-crop long inputs, which made CER/ranking incomparable.
+    """
+    w = np.asarray(wav, dtype=np.float32).reshape(-1)
     try:
-        return sep.separate(wav, sr=sr, max_sec=max_sep_sec)
+        return _exact_length_pair(sep.separate(w, sr=sr, max_sec=0.0), len(w), sr)
     except Exception as e:
         if not is_oom(e):
             raise
         empty_cache(sep)
-        shorter = oom_retry_sec(max_sep_sec)
-        print(f"[WARN] sep OOM → retry max_sep_sec={shorter}", flush=True)
-        w = wav
-        if shorter > 0:
-            w = truncate_wav(wav, sr=sr, max_sec=shorter, mode="energy")
-        return sep.separate(w, sr=sr, max_sec=shorter)
+        print(
+            f"[WARN] sep OOM → clear cache and retry full utterance "
+            f"duration={len(w) / float(sr):.3f}s (no truncation)",
+            flush=True,
+        )
+        return _exact_length_pair(sep.separate(w, sr=sr, max_sec=0.0), len(w), sr)
 
 
 def separate_batch_resilient(
@@ -111,32 +130,53 @@ def separate_batch_resilient(
     sr: int,
     max_sep_sec: float,
 ) -> list:
-    """Per-item results; one OOM must not mark the whole batch failed.
+    """Full-length inference with sorted batches and recursive batch backoff.
 
-    `separate_many` may return Exception per slot or raise. Failures are
-    retried with `separate_one_with_oom_retry`.
+    The caller groups similar lengths into full parallel batches.  A failed/OOM
+    batch is bisected until the bad item is isolated.  No retry truncates audio.
     """
     n = len(wavs)
     if n == 0:
         return []
     outs: list = [None] * n
-    used_many = False
-    if n > 1 and hasattr(sep, "separate_many"):
+    def run_group(indices: list[int]) -> None:
+        if len(indices) > 1 and hasattr(sep, "separate_many"):
+            try:
+                values = sep.separate_many(
+                    [wavs[i] for i in indices], sr=sr, max_sec=0.0
+                )
+                if len(values) != len(indices):
+                    raise RuntimeError(
+                        f"separate_many len {len(values)} != {len(indices)}"
+                    )
+                failed = []
+                for i, value in zip(indices, values):
+                    if isinstance(value, Exception) or value is None:
+                        failed.append(i)
+                    else:
+                        try:
+                            outs[i] = _exact_length_pair(
+                                value, len(np.asarray(wavs[i]).reshape(-1)), sr
+                            )
+                        except Exception:
+                            failed.append(i)
+                for i in failed:
+                    run_group([i])
+                return
+            except Exception as e:
+                if is_oom(e):
+                    empty_cache(sep)
+                mid = len(indices) // 2
+                run_group(indices[:mid])
+                run_group(indices[mid:])
+                return
+        i = indices[0]
         try:
-            many = sep.separate_many(wavs, sr=sr, max_sec=max_sep_sec)
-            if len(many) != n:
-                raise RuntimeError(f"separate_many len {len(many)} != {n}")
-            outs = list(many)
-            used_many = True
-        except Exception:
-            used_many = False
-            outs = [None] * n
-    for i, wav in enumerate(wavs):
-        val = outs[i] if used_many else None
-        if val is not None and not isinstance(val, Exception):
-            continue
-        try:
-            outs[i] = separate_one_with_oom_retry(sep, wav, sr, max_sep_sec)
+            outs[i] = separate_one_with_oom_retry(
+                sep, wavs[i], sr, max_sep_sec
+            )
         except Exception as e:
             outs[i] = e
+
+    run_group(list(range(n)))
     return outs

@@ -10,17 +10,19 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from sep_common import (  # noqa: E402
-    oom_retry_sec,
     separate_batch_resilient,
+    separate_one_with_oom_retry,
     split_two_speaker_wav,
 )
 from stage_resume import stage_complete  # noqa: E402
 from gate_policy import build_gate_plan  # noqa: E402
+from audit_sep_run import check_index  # noqa: E402
 
 
 def test_split_two_speaker_batch_speakers_time() -> None:
@@ -42,14 +44,6 @@ def test_split_two_speaker_speakers_batch_time() -> None:
     arr = np.stack([spk1, spk2], axis=0)[:, None, :]  # (2, 1, T)
     a, b = split_two_speaker_wav(arr)
     assert np.allclose(a, spk1) and np.allclose(b, spk2)
-
-
-def test_oom_retry_sec_unified() -> None:
-    assert oom_retry_sec(0) == 3.0
-    assert oom_retry_sec(-1) == 3.0
-    assert oom_retry_sec(6.0) == 3.0
-    assert oom_retry_sec(3.0) == 2.0
-    assert oom_retry_sec(2.0) == 2.0
 
 
 def test_kws_chinese_uses_pinyin_cer_not_strict_char_cer() -> None:
@@ -87,8 +81,9 @@ class _Sep:
 
     def separate(self, wav, sr=16000, max_sec=0.0):
         self.n_one += 1
-        if max_sec > 3.0 or max_sec == 0:
+        if self.n_one % 2 == 1:
             raise RuntimeError("CUDA out of memory")
+        assert max_sec == 0.0
         w = np.asarray(wav, dtype=np.float32).reshape(-1)
         return w, w + 0.01
 
@@ -102,8 +97,38 @@ def test_batch_oom_retries_per_item() -> None:
     outs = separate_batch_resilient(sep, wavs, sr=16000, max_sep_sec=6.0)
     assert len(outs) == 3
     assert all(not isinstance(x, Exception) for x in outs)
-    assert sep.n_many == 1
-    assert sep.n_one == 6  # 3 fail at 6s + 3 succeed at 3s
+    assert sep.n_many == 2  # failed 3-item batch is bisected; 2-item half stays batched
+    assert sep.n_one == 6  # every item retries once, always at full length
+    assert all(len(x[0]) == len(wavs[i]) for i, x in enumerate(outs))
+
+
+def test_max_sep_sec_never_truncates_long_audio() -> None:
+    class IdentitySep:
+        def separate(self, wav, sr=16000, max_sec=0.0):
+            assert max_sec == 0.0
+            return wav, -np.asarray(wav)
+
+    wav = np.linspace(-1, 1, 16000 * 7 + 123, dtype=np.float32)
+    a, b = separate_one_with_oom_retry(IdentitySep(), wav, 16000, 3.0)
+    assert len(a) == len(wav) and len(b) == len(wav)
+    assert np.allclose(a, wav) and np.allclose(b, -wav)
+
+
+def test_audit_rejects_truncated_separator_output() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "stage"
+        (root / "wav").mkdir(parents=True)
+        source = Path(td) / "source.wav"
+        sf.write(source, np.zeros(16000 * 4, dtype=np.float32), 16000)
+        sf.write(root / "wav" / "pos_1_peak.wav", np.zeros(16000 * 3), 16000)
+        row = {
+            "uid": "pos_1", "kws_path": str(source), "wake_text": "你好",
+            "oracle_cer": 0.0, "metric": "pinyin", "streams": {"original": {}},
+        }
+        index = root / "index.jsonl"
+        index.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+        stat = check_index(index)
+        assert stat["n_duration_errors"] == 1
 
 
 def test_full_stage_errors_not_complete() -> None:
