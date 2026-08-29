@@ -1,4 +1,6 @@
-# 本地 ↔ GitHub ↔ AutoDL 同步
+# 本地 ↔ GitHub ↔ AutoDL 同步（main 分支历史参考）
+
+> 当前目录是 `extract@sep`，不要按本文路径把它当作 `/root/extract@main` 更新。sep 分支同步后从 [仓库根 README](../README.md) 进入；main 与 sep 必须保持两个独立克隆。
 
 VE 已嵌在 **extract** 仓的 `ve/`（不含 dataset / 模型 / 跑数）。  
 数据与权重仍放 `/root/autodl-tmp/`。

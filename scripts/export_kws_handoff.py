@@ -20,10 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from paths import STAGE_DIRS, VALID_SPLITS, default_vm_out
 
-SKIP_DIRS = {"meta", "reports", "best_sep", "packs"}
 STREAM_TO_TAG = {"original": "peak"}
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-SCHEMA = "kws_sep_handoff/v1"
+SCHEMA = "kws_sep_handoff/v2"
 EXTRACT_REPO = "https://github.com/powerli2024/extract"
 EXTRACT_BRANCH = "sep"
 
@@ -46,11 +45,13 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def discover_indexes(split_root: Path) -> list[tuple[str, Path]]:
+    """Discover only the frozen s1-s8 registry, never arbitrary experiments."""
     found: list[tuple[str, Path]] = []
     if not split_root.is_dir():
         return found
-    for child in sorted(split_root.iterdir(), key=lambda p: p.name):
-        if not child.is_dir() or child.name in SKIP_DIRS or child.name.startswith("."):
+    for stage_name in STAGE_DIRS:
+        child = split_root / STAGE_DIRS[stage_name]
+        if not child.is_dir():
             continue
         idx = child / "index.jsonl"
         if idx.is_file():
@@ -182,8 +183,11 @@ def write_handoff(vm_out: Path, records: list[dict[str, Any]], splits: list[str]
         "selector_within_stage": "oracle_cer_prefer_original",
         "selector_across_stages": "min_oracle_cer_prefer_sep_then_stage_order",
         "peak_norm": 0.7,
-        "truncate_max_sec": 6.0,
-        "truncate_mode": "energy",
+        "audio_length_policy": "full_utterance_no_truncation",
+        "max_sep_sec": 0.0,
+        "truncate_max_sec": None,
+        "truncate_mode": None,
+        "duration_audit_tolerance_sec": 0.02,
         "stage_dirs": STAGE_DIRS,
         "splits": splits,
         "vm_out": str(vm_out),

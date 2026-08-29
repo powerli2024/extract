@@ -1,4 +1,6 @@
-# 当前最优流水线（提交默认）
+# 历史 VE 提交流水线（仅供 main 分支追溯）
+
+> **状态说明：** 这里记录的是 `main` 分支的一次历史结果快照，不是 `extract@sep` 的当前默认，也不能证明现时生产效果。`sep` 分支唯一流程见 [仓库根 README](../README.md)；需要复用数值时必须在 `main` 上冻结配置并重新严格评测。
 
 竞赛分：`0.5 * RR + 0.5 * (1 - CER)`。pos 误拒记 CER=1。  
 **只拒「说话人不在」**；过门后默认 **mix ASR**，不要换成全量 TSE。
@@ -13,7 +15,7 @@
 已有 `ve_mix_novad` 时不要重跑 Presence / pos ASR：
 
 ```bash
-conda activate ve
+conda activate ve-cu124
 cd /root/extract/ve
 VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 # → reports/submit/result.json   contest 应 ≈ 0.7389
@@ -22,7 +24,7 @@ VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh submit
 全新机器才走全量（仍不要 FORCE_CALIB）：
 
 ```bash
-conda activate ve
+conda activate ve-cu124
 cd /root/extract/ve
 ENROLL_VAD=0 PIPELINE=mix \
 PRESENCE_BACKEND=eres2netv2 USE_SEP=1 LANG_SPLIT=1 \
@@ -35,7 +37,7 @@ LOCKED_THR=1 EXTRA_REJECT=1 \
 环境清单见 [`SETUP.md`](SETUP.md)。问题口径与已否决方向见 [`PROBLEM.md`](PROBLEM.md)。分阶命令见 [`EXPERIMENTS.md`](EXPERIMENTS.md)。
 
 ```bash
-conda activate ve
+conda activate ve-cu124
 cd /root/extract/ve
 git pull --ff-only
 chmod +x *.sh
@@ -73,13 +75,11 @@ PIPELINE=mix ./check_env.sh
 
 ## 不要进默认
 
-- 全量 `PIPELINE=ps4|wesep|sep_route|cond_tasnet`（T5 未过门前）
+- 全量 `PIPELINE=ps4|wesep|sep_route`
 - 抬高 Presence τ
 - 多编码器 OR / 灰带救援（代理 +0.012，真实 ASR 不涨）
 - 把 Presence 代理 contest（CER:=FRR）当成提交分
 - 换更大 ASR（P5 搁置）
 
 ASR 消融（T1–T4）已结：均未过锁定 +0.005。提交用 `./run_next_lift.sh submit`。  
-T5 Cond-TasNet 是对照臂（`./run_next_lift.sh t5`），未过 +0.005 前不改 mix 默认。
-
 换更大 ASR（P5）仍搁置。

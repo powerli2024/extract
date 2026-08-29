@@ -1,432 +1,223 @@
 #!/usr/bin/env bash
-# 安装/搭建环境（conda create + pip）。检查请用 ./check_env.sh
-# extract@sep：全部装进 VE 环境（默认 conda 名 ve），含 torch / ORT / qwen-asr / clearvoice。
-# 不新建 qwen3-asr，也不用独立 ClearerVoice-Studio。
+# Ubuntu 20.04 / Python 3.10 / PyTorch cu124 统一环境构建。
+# 主流程、ClearVoice、Qwen-ASR、ONNX Runtime 和 DAE-TSE 共用同一解释器。
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/paths_defaults.sh"
-EXTRACT_PICK_DEFER=1
-# shellcheck disable=SC1091
-source "$ROOT/pick_python.sh"
-if [[ -f "$ROOT/ve/.env_ve" ]]; then
-  # shellcheck disable=SC1091
-  source "$ROOT/ve/.env_ve" || true
-fi
 
-echo "============================================"
-echo " VM setup_env (install into VE)"
-echo " ROOT=$ROOT"
-echo "============================================"
+ENV_NAME="${VM_CONDA_ENV:-ve-cu124}"
+PYTHON_VERSION="${VM_PYTHON_VERSION:-3.10}"
+TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
+PIP_INDEX="${VM_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PIP_TRUSTED="${VM_PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+DAE_TSE_REPO="${DAE_TSE_REPO:-/root/autodl-tmp/projects/DAE-TSE}"
+DAE_TSE_COMMIT="${DAE_TSE_COMMIT:-b306b2ac70e33a95047f9366cc9bb5fde29c0de6}"
+INSTALL_DAE="${VM_INSTALL_DAE_TSE:-1}"
+REQUIRE_DAE="${VM_REQUIRE_DAE_TSE:-0}"
+INSTALL_SYSTEM="${VM_INSTALL_SYSTEM_PACKAGES:-0}"
+RECREATE_ENV="${VM_RECREATE_ENV:-0}"
+REQUIRE_TOOLKIT="${VM_REQUIRE_CUDA_TOOLKIT:-0}"
+REQ="$ROOT/environment/requirements-cu124.txt"
+CONSTRAINTS="$ROOT/environment/constraints-cu124.txt"
 
-export CLEARVOICE_ROOT="${CLEARVOICE_ROOT:-}"
-mkdir -p "${HF_HOME:-/tmp}" "${TORCH_HOME:-/tmp}" "${PIP_CACHE_DIR:-/tmp}" 2>/dev/null || true
+ok() { echo "[ OK ] $*"; }
+warn() { echo "[WARN] $*"; }
+die() { echo "[ERR ] $*" >&2; exit 1; }
 
-ENV_NAME="${VM_CONDA_ENV:-ve}"
-PY_VER="${VM_PYTHON_VERSION:-3.12}"
-# CUDA wheel 标签：可 export TORCH_CUDA=cu124 / cu121 / cpu
-TORCH_CUDA="${TORCH_CUDA:-}"
-TUNA_INDEX="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-TUNA_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
-PIP_MIRROR=(-i "$TUNA_INDEX" --trusted-host "$TUNA_HOST")
-PIP_CONF="$ROOT/pip.conf"
+dae_issue() {
+  if [[ "$REQUIRE_DAE" == "1" ]]; then
+    die "$*"
+  fi
+  warn "$*；主环境继续，DAE-TSE 保持 NO_GO"
+}
 
-CONDA_BIN="${CONDA_BIN:-}"
-if [[ -z "$CONDA_BIN" ]]; then
-  for c in \
+version_ge() {
+  [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]
+}
+
+find_conda() {
+  local candidate
+  for candidate in \
+    "${CONDA_BIN:-}" \
     /root/miniconda3/bin/conda \
     /root/anaconda3/bin/conda \
-    "$(command -v conda || true)"
+    "$(command -v conda 2>/dev/null || true)"
   do
-    [[ -n "$c" && -x "$c" ]] && CONDA_BIN="$c" && break
+    [[ -n "$candidate" && -x "$candidate" ]] && { echo "$candidate"; return 0; }
   done
-fi
-
-resolve_env_python() {
-  local name="$1"
-  for c in \
-    "/root/miniconda3/envs/${name}/bin/python" \
-    "/root/anaconda3/envs/${name}/bin/python"
-  do
-    [[ -x "$c" ]] && { echo "$c"; return 0; }
-  done
-  if [[ -n "$CONDA_BIN" ]]; then
-    local p
-    p="$("$CONDA_BIN" run -n "$name" which python 2>/dev/null || true)"
-    [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
-  fi
   return 1
 }
 
-detect_torch_cuda_tag() {
-  if [[ -n "$TORCH_CUDA" ]]; then
-    echo "$TORCH_CUDA"
-    return 0
-  fi
-  if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "cpu"
-    return 0
-  fi
-  # e.g. "CUDA Version: 12.4"
-  local ver
-  ver="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1)"
-  if [[ -z "$ver" ]]; then
-    echo "cu124"
-    return 0
-  fi
-  local major minor
-  major="${ver%%.*}"
-  minor="${ver#*.}"
-  minor="${minor%%.*}"
-  if [[ "$major" -gt 12 ]] || { [[ "$major" -eq 12 ]] && [[ "${minor:-0}" -ge 4 ]]; }; then
-    echo "cu124"
-  elif [[ "$major" -eq 12 ]]; then
-    echo "cu121"
-  elif [[ "$major" -eq 11 ]]; then
-    echo "cu118"
-  else
-    echo "cu124"
-  fi
+env_python() {
+  "$CONDA_BIN" run -n "$ENV_NAME" python -c 'import sys; print(sys.executable)' 2>/dev/null | tail -n1
 }
 
-need_reinstall_torch() {
-  # 缺包 / CPU-only 但机器有 GPU → 需要重装
-  "$PYTHON_BIN" - <<'PY'
-import sys
-try:
-    import torch
-except Exception:
-    sys.exit(1)
-try:
-    import torchaudio  # noqa: F401
-except Exception:
-    sys.exit(1)
-has_gpu = False
-try:
-    import subprocess
-    has_gpu = subprocess.call(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
-except Exception:
-    pass
-if has_gpu and not torch.cuda.is_available():
-    sys.exit(2)
-sys.exit(0)
-PY
-}
+echo "============================================================"
+echo " extract-sep unified env: Ubuntu 20.04 / Python 3.10 / cu124"
+echo " conda=$ENV_NAME  DAE=$INSTALL_DAE  REQUIRE_DAE=$REQUIRE_DAE  NVCC=$REQUIRE_TOOLKIT"
+echo "============================================================"
 
-maybe_network_turbo() {
-  # AutoDL 学术加速：仅官方 pytorch/HF 回退时需要
-  if [[ -f /etc/network_turbo ]]; then
-    # shellcheck disable=SC1091
-    source /etc/network_turbo || true
-    echo "[INFO] 已 source /etc/network_turbo"
-  fi
-}
-
-apply_pip_tuna() {
-  # 全局默认清华源：环境变量 + PIP_CONFIG_FILE，避免漏掉 -i 的 pip 走到官方
-  export PIP_INDEX_URL="$TUNA_INDEX"
-  export PIP_TRUSTED_HOST="$TUNA_HOST"
-  export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
-  export PIP_DISABLE_PIP_VERSION_CHECK=1
-  if [[ -f "$PIP_CONF" ]]; then
-    export PIP_CONFIG_FILE="$PIP_CONF"
-  fi
-  echo "[INFO] pip 默认源 = 清华 $TUNA_INDEX"
-}
-
-vm_pip() {
-  "$PYTHON_BIN" -m pip install "${PIP_MIRROR[@]}" "$@"
-}
-
-torch_cuda_ok() {
-  "$PYTHON_BIN" - <<'PY'
-import torch, torchaudio  # noqa: F401
-import os, sys
-want_gpu = os.environ.get("_VM_WANT_GPU", "1") == "1"
-if want_gpu and not torch.cuda.is_available():
-    sys.exit(2)
-print(f"torch={torch.__version__} cuda={torch.cuda.is_available()}")
-PY
-}
-
-install_torch_stack() {
-  local tag="$1"
-  echo "[INFO] 安装 torch / torchaudio （tag=$tag；优先清华 PyPI）..."
-  export PIP_ROOT_USER_ACTION="${PIP_ROOT_USER_ACTION:-ignore}"
-  export _VM_WANT_GPU=1
-
-  echo "[INFO] [1/2] 清华源 pip install torch torchaudio"
-  if vm_pip torch torchaudio; then
-    if [[ "$tag" == "cpu" ]] || torch_cuda_ok; then
-      echo "[ OK ] 清华源 torch 可用"
-      return
-    fi
-    echo "[WARN] 清华源装上了 torch，但 CUDA 不可用，将卸掉后改用官方 ${tag} wheel"
-    "$PYTHON_BIN" -m pip uninstall -y torch torchaudio torchvision >/dev/null 2>&1 || true
-  else
-    echo "[WARN] 清华源安装 torch 失败，尝试官方 CUDA 索引"
-  fi
-
-  if [[ "$tag" == "cpu" ]]; then
-    return
-  fi
-
-  # 官方 CUDA 索引会替换 PyPI；只作为清华无 GPU wheel 时的回退
-  local idx="${TORCH_INDEX:-https://download.pytorch.org/whl/${tag}}"
-  maybe_network_turbo
-  echo "[INFO] [2/2] 回退官方 CUDA 索引: --index-url $idx"
-  if "$PYTHON_BIN" -m pip install torch torchaudio --index-url "$idx"; then
-    if torch_cuda_ok; then
-      echo "[ OK ] 官方 ${tag} torch 可用"
-      return
-    fi
-  fi
-  echo "[ERR] torch CUDA 安装失败。可: source /etc/network_turbo && TORCH_INDEX=$idx ./setup_env.sh"
-}
-
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "$PYTHON_BIN" ]]; then
-  if p="$(resolve_env_python "$ENV_NAME" 2>/dev/null)"; then
-    PYTHON_BIN="$p"
-    echo "[INFO] 复用已有环境: $ENV_NAME -> $PYTHON_BIN"
-  elif [[ -n "$CONDA_BIN" ]]; then
-    echo "[INFO] 未找到 conda 环境 '$ENV_NAME'，正在创建 (python=$PY_VER) ..."
-    "$CONDA_BIN" create -n "$ENV_NAME" "python=$PY_VER" -y
-    PYTHON_BIN="$(resolve_env_python "$ENV_NAME")"
-    echo "[INFO] 已创建: $PYTHON_BIN"
-  else
-    echo "[WARN] 未找到 conda，回退到当前 python3（不推荐）"
-    PYTHON_BIN="$(command -v python3 || command -v python)"
-  fi
+[[ -r /etc/os-release ]] || die "找不到 /etc/os-release；本脚本只支持 Ubuntu 20.04"
+# shellcheck disable=SC1091
+source /etc/os-release
+if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "20.04" ]]; then
+  die "宿主机必须为 Ubuntu 20.04，当前为 ${PRETTY_NAME:-unknown}"
 fi
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
+ok "OS=${PRETTY_NAME}"
 
-apply_pip_tuna
-echo "[INFO] pip upgrade ..."
-vm_pip -U pip setuptools wheel >/dev/null || true
-
-# 1) torch / torchaudio（ASR + 通用 CUDA）
-TORCH_TAG="$(detect_torch_cuda_tag)"
-echo "[INFO] TORCH_CUDA tag=$TORCH_TAG (可用 TORCH_CUDA=cu124 覆盖)"
-set +e
-need_reinstall_torch
-trc=$?
-set -e
-if [[ "$trc" -ne 0 ]]; then
-  install_torch_stack "$TORCH_TAG"
+command -v nvidia-smi >/dev/null 2>&1 || die "缺少 nvidia-smi / NVIDIA 驱动"
+DRIVER_VERSION="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1 | tr -d '[:space:]')"
+[[ -n "$DRIVER_VERSION" ]] || die "无法读取 NVIDIA 驱动版本"
+version_ge "$DRIVER_VERSION" "525.60.13" \
+  || die "CUDA 12.x wheel 运行时要求 Linux driver >=525.60.13，当前 $DRIVER_VERSION"
+if version_ge "$DRIVER_VERSION" "550.54.14"; then
+  ok "NVIDIA driver=$DRIVER_VERSION（达到 CUDA Toolkit 12.4 GA 推荐线）"
 else
-  echo "[ OK ] torch / torchaudio 已可用"
+  warn "NVIDIA driver=$DRIVER_VERSION：满足 CUDA 12.x minor compatibility，但低于 Toolkit 12.4 GA 的 550.54.14"
+fi
+if [[ "$REQUIRE_TOOLKIT" == "1" ]]; then
+  version_ge "$DRIVER_VERSION" "550.54.14" \
+    || die "VM_REQUIRE_CUDA_TOOLKIT=1 要求 driver>=550.54.14"
+  command -v nvcc >/dev/null 2>&1 || die "VM_REQUIRE_CUDA_TOOLKIT=1 但找不到 nvcc"
+  NVCC_RELEASE="$(nvcc --version | sed -n 's/.*release \([0-9.]*\).*/\1/p' | tail -n1)"
+  [[ "$NVCC_RELEASE" == "12.4" ]] || die "要求 nvcc 12.4，当前 ${NVCC_RELEASE:-unknown}"
+  ok "nvcc=$NVCC_RELEASE"
 fi
 
-# 1.5+2) onnxruntime-gpu + nvidia CUDA pip 库（ORT 找 libcublasLt.so.12）
-# 禁止 pip -U nvidia-*：torch 2.6+cu124 钉死 12.4.127，-U 会升到 12.6
-ORT_REQ="$ROOT/requirements-ort.txt"
-echo "[INFO] pip: $ORT_REQ → $PYTHON_BIN"
-if [[ "$TORCH_TAG" == "cpu" ]]; then
-  echo "[WARN] CPU 机器：装 onnxruntime（无 GPU EP）"
-  vm_pip onnxruntime || "$PYTHON_BIN" -m pip install onnxruntime
-else
-  if "$PYTHON_BIN" -c "import onnxruntime as ort; print(ort.get_available_providers())" 2>/dev/null | grep -qi CUDA; then
-    echo "[ OK ] onnxruntime 已含 CUDAExecutionProvider"
+if [[ "$INSTALL_SYSTEM" == "1" ]]; then
+  command -v apt-get >/dev/null 2>&1 || die "VM_INSTALL_SYSTEM_PACKAGES=1 但没有 apt-get"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    build-essential ffmpeg git git-lfs libsndfile1 locales sox zlib1g
+fi
+
+missing_commands=()
+for command_name in ffmpeg git sox; do
+  command -v "$command_name" >/dev/null 2>&1 || missing_commands+=("$command_name")
+done
+if (( ${#missing_commands[@]} )); then
+  die "缺少系统命令: ${missing_commands[*]}。以 root 运行: VM_INSTALL_SYSTEM_PACKAGES=1 bash ./setup_env.sh"
+fi
+
+CONDA_BIN="$(find_conda)" || die "未找到 conda；请先安装 Miniconda"
+ok "conda=$CONDA_BIN"
+
+if "$CONDA_BIN" env list | awk '{print $1}' | grep -Fxq "$ENV_NAME"; then
+  if [[ "$RECREATE_ENV" == "1" ]]; then
+    echo "[INFO] 按 VM_RECREATE_ENV=1 删除并重建 conda 环境: $ENV_NAME"
+    "$CONDA_BIN" env remove -n "$ENV_NAME" -y
+    "$CONDA_BIN" create -n "$ENV_NAME" "python=$PYTHON_VERSION" -y
   else
-    "$PYTHON_BIN" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
-    if [[ -f "$ORT_REQ" ]]; then
-      vm_pip -r "$ORT_REQ" || "$PYTHON_BIN" -m pip install -r "$ORT_REQ"
+    CURRENT_PY="$($CONDA_BIN run -n "$ENV_NAME" python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    [[ "$CURRENT_PY" == "3.10" ]] \
+      || die "已有 $ENV_NAME 使用 Python $CURRENT_PY；请换环境名，或明确执行 VM_RECREATE_ENV=1 bash ./setup_env.sh"
+    ok "复用 conda env=$ENV_NAME (Python $CURRENT_PY)"
+  fi
+else
+  "$CONDA_BIN" create -n "$ENV_NAME" "python=$PYTHON_VERSION" -y
+fi
+
+PYTHON_BIN="$(env_python)"
+[[ -x "$PYTHON_BIN" ]] || die "无法解析 $ENV_NAME 的 Python: $PYTHON_BIN"
+ok "PYTHON_BIN=$PYTHON_BIN"
+
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_ROOT_USER_ACTION=ignore
+"$PYTHON_BIN" -m pip install \
+  --index-url "$PIP_INDEX" --trusted-host "$PIP_TRUSTED" \
+  pip==25.1.1 setuptools==80.9.0 wheel==0.45.1
+
+echo "[INFO] 安装官方 PyTorch cu124 固定组合"
+"$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX" \
+  torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
+
+echo "[INFO] 安装统一环境其余固定依赖"
+"$PYTHON_BIN" -m pip install \
+  --index-url "$PIP_INDEX" --trusted-host "$PIP_TRUSTED" \
+  --constraint "$CONSTRAINTS" --requirement "$REQ"
+
+if [[ "$INSTALL_DAE" == "1" ]]; then
+  DAE_SOURCE_READY=1
+  if [[ ! -e "$DAE_TSE_REPO" ]]; then
+    mkdir -p "$(dirname "$DAE_TSE_REPO")"
+    if ! git clone https://github.com/GnafiY/DAE-TSE.git "$DAE_TSE_REPO" \
+      || ! git -C "$DAE_TSE_REPO" checkout --detach "$DAE_TSE_COMMIT"; then
+      dae_issue "无法获取固定 DAE-TSE 源码 $DAE_TSE_COMMIT"
+      DAE_SOURCE_READY=0
+    fi
+  fi
+  if [[ "$DAE_SOURCE_READY" == "1" && ! -d "$DAE_TSE_REPO/.git" ]]; then
+    dae_issue "DAE_TSE_REPO 不是 Git 克隆: $DAE_TSE_REPO"
+    DAE_SOURCE_READY=0
+  fi
+  if [[ "$DAE_SOURCE_READY" == "1" ]]; then
+    DAE_HEAD="$(git -C "$DAE_TSE_REPO" rev-parse HEAD)"
+    if [[ "$DAE_HEAD" != "$DAE_TSE_COMMIT" ]]; then
+      dae_issue "DAE-TSE commit=$DAE_HEAD，期望 $DAE_TSE_COMMIT；未自动切换现有代码"
+      DAE_SOURCE_READY=0
+    elif [[ -n "$(git -C "$DAE_TSE_REPO" status --porcelain --untracked-files=no)" ]]; then
+      dae_issue "DAE-TSE tracked files 有本地修改；请保存修改或另建固定 commit 克隆"
+      DAE_SOURCE_READY=0
+    fi
+  fi
+  if [[ "$DAE_SOURCE_READY" == "1" ]]; then
+    if "$PYTHON_BIN" -m pip install --no-deps --editable "$DAE_TSE_REPO" \
+      && "$PYTHON_BIN" -m pip install --no-deps --editable "$DAE_TSE_REPO/kce"; then
+      ok "DAE-TSE wesep/kce 已装入同一环境"
     else
-      vm_pip onnxruntime-gpu || "$PYTHON_BIN" -m pip install onnxruntime-gpu
+      dae_issue "DAE-TSE wesep/kce 安装失败"
     fi
   fi
 fi
 
-echo "[INFO] 硬检查: $PYTHON_BIN -c 'import onnxruntime'"
-if ! "$PYTHON_BIN" -c "import onnxruntime as ort; print('ort', getattr(ort,'__version__', '?'), ort.get_available_providers())"; then
-  echo "[ERR] $PYTHON_BIN 没有 onnxruntime。"
-  echo "  不要只 pip install -r requirements.txt（里面没有 ORT）。"
-  echo "  请: $PYTHON_BIN -m pip install -r $ORT_REQ"
-  echo "  或重新: ./setup_env.sh"
-  exit 1
-fi
+"$PYTHON_BIN" -m pip check
 
-# 验证 ORT 在补齐 LD_LIBRARY_PATH 后能否真正用 CUDA
-echo "[INFO] 验证 ORT CUDA（含 torch nvidia lib 路径）..."
-"$PYTHON_BIN" - <<'PY' || echo "[WARN] ORT CUDA 验证未通过，运行时会尝试再注入路径"
-import os, sys
-from pathlib import Path
-try:
-    import torch
-    site = Path(torch.__file__).resolve().parent.parent
-    dirs=[]
-    for sub in ("nvidia/cublas/lib","nvidia/cuda_runtime/lib","nvidia/cudnn/lib","nvidia/nvjitlink/lib","nvidia/cufft/lib"):
-        p=site/sub
-        if p.is_dir(): dirs.append(str(p))
-    if dirs:
-        os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(dirs + [os.environ.get("LD_LIBRARY_PATH","")])
-except Exception as e:
-    print("torch path prep fail", e)
-import onnxruntime as ort
-print("providers=", ort.get_available_providers())
-assert "CUDAExecutionProvider" in ort.get_available_providers(), "no CUDA EP"
-print("ORT CUDA OK")
-PY
-
-# 3) 本仓库 requirements.txt（音频 / CER / qwen-asr 及其传递依赖）
-REQ_FILE="$ROOT/requirements.txt"
-echo "[INFO] pip: $REQ_FILE ..."
-if [[ -f "$REQ_FILE" ]]; then
-  vm_pip -U -r "$REQ_FILE" \
-    || "$PYTHON_BIN" -m pip install -U -r "$REQ_FILE"
-else
-  echo "[WARN] 缺少 $REQ_FILE，回退逐包安装"
-  vm_pip -U \
-    numpy scipy soxr soundfile librosa audioread \
-    editdistance pypinyin tqdm packaging \
-    huggingface_hub sentencepiece protobuf safetensors einops
-fi
-
-# 4) qwen-asr（requirements 已含；此处再确认，失败则单独重试）
-echo "[INFO] 确认 qwen-asr ..."
-if "$PYTHON_BIN" -c "import qwen_asr" 2>/dev/null; then
-  echo "[ OK ] qwen_asr 已可 import"
-else
-  vm_pip -U "qwen-asr" \
-    || "$PYTHON_BIN" -m pip install -U "qwen-asr"
-fi
-
-# 5) ClearVoice 装进同一 VE python（s2/s4/s5/s7/s8）
-OPT_REQ="$ROOT/requirements-optional.txt"
-echo "[INFO] pip: $OPT_REQ (clearvoice → VE) ..."
-if [[ -f "$OPT_REQ" ]]; then
-  vm_pip -r "$OPT_REQ" || "$PYTHON_BIN" -m pip install -r "$OPT_REQ" \
-    || echo "[WARN] clearvoice 安装失败；s1/s3/s6 仍可跑，s2+ 需要: $PYTHON_BIN -m pip install clearvoice"
-fi
-if "$PYTHON_BIN" -c "import clearvoice" 2>/dev/null; then
-  echo "[ OK ] clearvoice 已在 VE python"
-else
-  echo "[WARN] VE python 尚不能 import clearvoice"
-fi
-export CLEARVOICE_PYTHON="$PYTHON_BIN"
-
-mkdir -p "$VM_OUT/pos" "$VM_OUT/neg" "$VM_OUT/reports" "$VM_OUT/packs" "$MOSS_CKPT_DIR"
-
-mkdir -p "$ROOT/.runtime"
-echo "$PYTHON_BIN" >"$ROOT/.runtime/python_bin"
+mkdir -p "$ROOT/.runtime" "$VM_OUT/meta"
+printf '%s\n' "$PYTHON_BIN" >"$ROOT/.runtime/python_bin"
 cat >"$ROOT/.runtime/env.sh" <<EOF
-# auto-generated by setup_env.sh — also: source $ROOT/env.sh
+# generated by setup_env.sh
 export PYTHON_BIN="$PYTHON_BIN"
+export CLEARVOICE_PYTHON="$PYTHON_BIN"
+export DAE_PYTHON_BIN="$PYTHON_BIN"
 export VM_CONDA_ENV="$ENV_NAME"
+export DAE_TSE_REPO="${DAE_TSE_REPO}"
+export DAE_TSE_COMMIT="${DAE_TSE_COMMIT}"
+export DAE_TSE_CONFIG="${DAE_TSE_CONFIG:-}"
+export DAE_TSE_CHECKPOINT="${DAE_TSE_CHECKPOINT:-}"
 export DATA_DIR="\${DATA_DIR:-$DATA_DIR}"
 export VM_OUT="\${VM_OUT:-$VM_OUT}"
 export ASR_MODEL_DIR="\${ASR_MODEL_DIR:-$ASR_MODEL_DIR}"
 export MOSS_CKPT_DIR="\${MOSS_CKPT_DIR:-$MOSS_CKPT_DIR}"
-export CLEARVOICE_ROOT="\${CLEARVOICE_ROOT:-}"
-export CLEARVOICE_PYTHON="$PYTHON_BIN"
-export PATH="\$(dirname "$PYTHON_BIN"):\$PATH"
-export PIP_INDEX_URL="${TUNA_INDEX}"
-export PIP_TRUSTED_HOST="${TUNA_HOST}"
-export PIP_CONFIG_FILE="${PIP_CONF}"
-export PIP_ROOT_USER_ACTION="ignore"
+export HF_HOME="\${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
+export TORCH_HOME="\${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
+export PIP_CACHE_DIR="\${PIP_CACHE_DIR:-/root/autodl-tmp/cache/pip}"
+export PATH="$(dirname "$PYTHON_BIN"):\$PATH"
 EOF
 cp -f "$ROOT/.runtime/env.sh" "$ROOT/env.sh"
 
-# 与 ve/.env_ve 对齐 PYTHON_BIN（不覆盖已有 VE 路径配置）
-if [[ -d "$ROOT/ve" ]]; then
-  if [[ ! -f "$ROOT/ve/.env_ve" ]]; then
-    cat > "$ROOT/ve/.env_ve" <<VEEOF
-export VE_ROOT="$ROOT/ve"
-export PYTHON_BIN="$PYTHON_BIN"
-export CLEARVOICE_PYTHON="$PYTHON_BIN"
-export PATH="$(dirname "$PYTHON_BIN"):\$PATH"
-export DATA_DIR="${DATA_DIR}"
-export HF_HOME="${HF_HOME:-/root/autodl-tmp/cache/huggingface}"
-export TORCH_HOME="${TORCH_HOME:-/root/autodl-tmp/cache/torch}"
-export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/root/autodl-tmp/cache/pip}"
-VEEOF
-    echo "[OK] wrote $ROOT/ve/.env_ve"
-  fi
+VERIFY_ARGS=(--json-out "$VM_OUT/meta/env_cuda124_verify.json")
+if [[ "$INSTALL_DAE" == "1" ]]; then
+  VERIFY_ARGS+=(--dae-repo "$DAE_TSE_REPO")
+  [[ -n "${DAE_TSE_CONFIG:-}" ]] && VERIFY_ARGS+=(--dae-config "$DAE_TSE_CONFIG")
+  [[ -n "${DAE_TSE_CHECKPOINT:-}" ]] && VERIFY_ARGS+=(--dae-checkpoint "$DAE_TSE_CHECKPOINT")
+  [[ "$REQUIRE_DAE" == "1" ]] && VERIFY_ARGS+=(--require-dae)
+fi
+set +e
+"$PYTHON_BIN" "$ROOT/environment/verify_cuda124.py" "${VERIFY_ARGS[@]}"
+VERIFY_RC=$?
+set -e
+if [[ "$VERIFY_RC" -eq 1 ]]; then
+  die "统一环境硬检查失败；查看 $VM_OUT/meta/env_cuda124_verify.json"
+elif [[ "$VERIFY_RC" -eq 2 ]]; then
+  warn "主环境可用，但 DAE 中文资产尚未齐全；查看验证报告"
 fi
 
-echo "[INFO] 写出环境快照 → $VM_OUT/meta/env_snapshot.txt"
-mkdir -p "$VM_OUT/meta"
-{
-  echo "PYTHON_BIN=$PYTHON_BIN"
-  echo "VM_CONDA_ENV=$ENV_NAME"
-  echo "TORCH_CUDA=$TORCH_TAG"
-  echo "DATA_DIR=$DATA_DIR"
-  echo "VM_OUT=$VM_OUT"
-  echo "CLEARVOICE_ROOT=$CLEARVOICE_ROOT"
-  echo "CLEARVOICE_PYTHON=$CLEARVOICE_PYTHON"
-  echo "MOSS_CKPT_DIR=$MOSS_CKPT_DIR"
-  echo "ASR_MODEL_DIR=$ASR_MODEL_DIR"
-  echo "MOSS_ONNX_PATH=${MOSS_ONNX_PATH:-}"
-  "$PYTHON_BIN" - <<'PY' || true
-import importlib
-mods = (
-    "torch", "torchaudio", "onnxruntime", "qwen_asr",
-    "editdistance", "pypinyin", "soundfile", "numpy", "scipy",
-    "librosa", "soxr", "tqdm", "huggingface_hub", "clearvoice",
-)
-for m in mods:
-    try:
-        mod = importlib.import_module(m)
-        extra = ""
-        if m == "torch":
-            import torch
-            extra = f" cuda={torch.cuda.is_available()} ver={torch.__version__}"
-        if m == "onnxruntime":
-            import onnxruntime as ort
-            extra = f" providers={ort.get_available_providers()}"
-        print(f"import {m}=OK{extra}")
-    except Exception as e:
-        print(f"import {m}=FAIL {e}")
-PY
-  date -Iseconds 2>/dev/null || date
-} >"$VM_OUT/meta/env_snapshot.txt"
-
+"$PYTHON_BIN" -m pip freeze >"$VM_OUT/meta/requirements-lock-cu124.txt"
 echo ""
-echo "===== 关键结果摘要 ====="
-"$PYTHON_BIN" - <<'PY' || true
-import importlib
-checks = {
-    "torch": "torch",
-    "torchaudio": "torchaudio",
-    "onnxruntime": "onnxruntime",
-    "qwen_asr": "qwen_asr",
-}
-for name, modn in checks.items():
-    try:
-        importlib.import_module(modn)
-        print(f"[ OK ] {name}")
-    except Exception as e:
-        print(f"[ERR ] {name}: {e}")
-try:
-    import torch
-    print(f"       torch={torch.__version__} cuda={torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"       gpu={torch.cuda.get_device_name(0)}")
-except Exception:
-    pass
-try:
-    import onnxruntime as ort
-    print(f"       ort providers={ort.get_available_providers()}")
-except Exception:
-    pass
-PY
-
-if ! "$PYTHON_BIN" -c "import onnxruntime" 2>/dev/null; then
-  echo "[ERR] setup 结束时 $PYTHON_BIN 仍无 onnxruntime，已中止。"
-  exit 1
-fi
-
-echo ""
-echo "setup 完成。PYTHON_BIN=$PYTHON_BIN  （VE 环境，conda 名 $ENV_NAME）"
-echo "ClearVoice 与 ASR 同一解释器: CLEARVOICE_PYTHON=$PYTHON_BIN"
-echo "接下来:"
-echo "  1) source ./env.sh          # 或: conda activate ve && source ve/.env_ve"
-echo "  2) ./download_models.sh"
-echo "  3) ./check_env.sh"
-echo "  4) ./run_sep.sh --limit 20"
-echo ""
-echo "手动覆盖 CUDA wheel 示例:"
-echo "  TORCH_CUDA=cu124 ./setup_env.sh"
-echo "  TORCH_CUDA=cu121 ./setup_env.sh"
+ok "统一环境构建完成"
+echo "  source $ROOT/env.sh"
+echo "  bash $ROOT/check_env.sh"
+echo "  完整锁文件: $VM_OUT/meta/requirements-lock-cu124.txt"
+echo "  验证报告:   $VM_OUT/meta/env_cuda124_verify.json"

@@ -1,5 +1,2 @@
-# 可选；s2/s4/s5/s7/s8 需要。extract@sep 装进同一 VE python，不要另开 ClearerVoice-Studio。
-clearvoice
-
-# FunASR Paraformer 回退（默认不用；主路径是 Qwen3-ASR）
-# funasr
+# 兼容入口。统一环境默认已经安装；s2/s4/s5/s7/s8 使用。
+clearvoice==0.1.2

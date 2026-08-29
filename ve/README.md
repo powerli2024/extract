@@ -1,4 +1,6 @@
-# VE：Presence-gated Target Speaker Extraction
+# VE：Presence-gated Target Speaker Extraction（main 分支参考）
+
+> **分支边界：** 当前工作区是 `extract@sep`，`./ve.sh` 会拒绝执行。本目录文档仅用于解释 `main` 分支的历史 VE 实现；KWS 分离请从 [仓库根 README](../README.md) 开始，Presence/比赛评测请在 `/root/extract@main` 使用与其当前代码同步的文档。
 
 **当前提交默认不是 ps4。** 环境构建见 [`SETUP.md`](SETUP.md)，最优流水线见 [`CURRENT.md`](CURRENT.md)（Presence + **mix** ASR）。
 

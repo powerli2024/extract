@@ -1,4 +1,6 @@
-# VE / VP 新环境清单
+# VE / VP 新环境清单（main 分支历史参考）
+
+> **不要用于 `extract@sep` 部署。** sep 分支的环境、运行和验收统一见 [OPERATIONS.md](../OPERATIONS.md)。本文只对应 `/root/extract@main` 的历史 VE/VP 环境。
 
 复制到 AutoDL 后按节执行。大文件只放 `/root/autodl-tmp/`。
 
@@ -56,7 +58,7 @@ cp /root/extract/ve/.env_ve.example /root/extract/ve/.env_ve
 | `SAMPLES` | `$VE_OUT/manifest/samples.jsonl` | 可手指定 |
 | `SEP_ROOT` | 自动找 `ve_gate_cmp/sep_streams` | 须含 `d1/` |
 | `DEVICE` | `cuda:0` | |
-| `PYTHON_BIN` | conda env `ve` 的 python | 与 ASR / ClearVoice 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
+| `PYTHON_BIN` | conda env `ve-cu124` 的 python | 与 ASR / ClearVoice / DAE-TSE 同一解释器；`./setup_env.sh` 会写入 `.env_ve` |
 
 ### 2.2 模型路径
 
@@ -117,7 +119,7 @@ source .env_ve
 
 # --- Python ---
 ./setup_env.sh
-conda activate ve          # 若用了 conda 环境名 ve
+conda activate ve-cu124
 source .env_ve             # setup 后再 source 一次
 
 # --- 数据（从本机拷/解压到 autodl-tmp）---
@@ -142,7 +144,7 @@ python -c "import mossformer2_onnx; print('moss ok')"
 最小可跑（Presence + mix + ASR，推荐新环境第一条正式命令）：
 
 ```bash
-cd /root/extract/ve && source .env_ve && conda activate ve
+cd /root/extract-sep/ve && source .env_ve && conda activate ve-cu124
 FORCE_CALIB=1 HOLDOUT_FRAC=0.3 ENROLL_VAD=0 PIPELINE=mix LIMIT=32 SKIP_ASR=1 ./run_all.sh
 # 通过后再 LIMIT=0 且去掉 SKIP_ASR
 ```

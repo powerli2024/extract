@@ -1,4 +1,6 @@
-# AutoDL 部署清单（4090 开发 / L20 比赛）
+# AutoDL 部署清单（main 分支历史参考）
+
+> **不要在 `extract@sep` 执行本文命令。** 本分支的 AutoDL 手册是 [OPERATIONS.md](../OPERATIONS.md)；Presence、CMD 与比赛评测必须在 `/root/extract@main` 运行，并以 main 分支当前文档为准。
 
 ## 磁盘布局
 

@@ -1,4 +1,6 @@
-# VP：Voice Presence（说话人在场 / 拒识）
+# VP：Voice Presence（main 分支历史参考）
+
+> VP 不属于 `extract@sep` 的执行范围。sep 只产出 KWS 候选和 handoff；Presence 应在 `/root/extract@main` 运行。分支边界见 [仓库根 README](../../README.md)。
 
 独立于 TSE 与 ASR。本目录可整体拆成单独仓库；当前复用上级 `VE/scripts` 的编码器与打分实现，避免复制权重加载逻辑。
 

@@ -1,4 +1,6 @@
-# USEF-TSE 直接使用时的采样率策略
+# USEF-TSE 直接使用时的采样率策略（历史调研）
+
+> USEF-TSE 未接入 `extract@sep`，也不是当前改进主线。本文仅保留为 `main` 分支历史调研；sep 分支的改进路线见 [IMPROVEMENTS.md](../IMPROVEMENTS.md)。
 
 公开权重（[ZBang/USEF-TSE](https://github.com/ZBang/USEF-TSE)）配置为 **`sample_rate: 8000`**。  
 VE 数据、Presence、ASR 均为 **16 kHz**。若直接加载预训练 ckpt（不重新训练），必须显式处理 16↔8。

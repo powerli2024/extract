@@ -20,6 +20,7 @@ export MOSS_CKPT_DIR="$REQUESTED_MOSS_CKPT_DIR"
 echo "[INFO] PYTHON_BIN=$PYTHON_BIN"
 echo "[INFO] VM_OUT=$VM_OUT (existing successful rows are resumed; nothing is deleted)"
 "$PYTHON_BIN" "$ROOT/scripts/test_sep_invariants.py"
+"$PYTHON_BIN" "$ROOT/scripts/test_dae_tse_integration.py"
 bash "$ROOT/check_env.sh"
 
 if [[ "$MODE" == "--smoke" || "$MODE" == "--all" ]]; then
@@ -33,6 +34,10 @@ if [[ "$MODE" == "--full" || "$MODE" == "--all" ]]; then
   bash "$ROOT/run_sep.sh"
   "$PYTHON_BIN" "$ROOT/scripts/audit_sep_run.py" --vm-out "$VM_OUT" --expected-uids 1838
   if [[ -f /root/kws/scripts/compare_all_stages.py ]]; then
+    echo "[INFO] validate extract-sep -> kws input contract"
+    "$PYTHON_BIN" /root/kws/scripts/audit_sep_input.py \
+      --pos-neg "$VM_OUT" --expected-uids 1838 --check-duration --require-handoff \
+      --out "$VM_OUT/reports/kws_input_audit.json"
     echo "[INFO] systematic independent-stage comparison"
     "$PYTHON_BIN" /root/kws/scripts/compare_all_stages.py \
       --pos-neg "$VM_OUT" --expected-uids 1838 --hash-wav \

@@ -2,8 +2,8 @@
 # 选定 VE 用的解释器，并可选把 Presence 依赖装进同一个 bin。
 # 须先设 ROOT=ve 目录。source 本文件后导出 PYTHON_BIN。
 #
-# 优先级：已设 PYTHON_BIN → extract env.sh / .runtime → conda ve → qwen3-asr（旧名回退） → python3
-# 不新建第二套环境；ClearVoice 与 ASR 都进 PYTHON_BIN。
+# 优先级：已设 PYTHON_BIN → extract env.sh / .runtime → conda ve-cu124 → 历史环境回退 → python3
+# 不新建第二套环境；ClearVoice、ASR 与 DAE-TSE 都进 PYTHON_BIN。
 _ve_pick_python() {
   local c p
   if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -32,6 +32,9 @@ _ve_pick_python() {
     [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
   fi
   for c in \
+    /root/miniconda3/envs/ve-cu124/bin/python \
+    /root/miniconda3/envs/ve-cu124/bin/python3 \
+    /root/anaconda3/envs/ve-cu124/bin/python \
     /root/miniconda3/envs/ve/bin/python \
     /root/miniconda3/envs/ve/bin/python3 \
     /root/anaconda3/envs/ve/bin/python \
@@ -51,11 +54,15 @@ export PATH="$(dirname "$PYTHON_BIN"):${PATH:-/usr/bin}"
 
 ensure_modelscope() {
   local py="${1:-$PYTHON_BIN}"
+  local constraints=()
   local mirror=(
     -i "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     --trusted-host "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
   )
-  # 仅有 modelscope 不够：speaker-verification pipeline 还要 audio extra / funasr
+  if [[ -n "${ROOT:-}" && -f "$ROOT/../environment/constraints-cu124.txt" ]]; then
+    constraints=(--constraint "$ROOT/../environment/constraints-cu124.txt")
+  fi
+  # 不装 modelscope[audio]：其 librosa==0.10.1 与 ClearVoice 冲突。
   local need=0
   "$py" -c "import modelscope" 2>/dev/null || need=1
   "$py" -c "from modelscope.pipelines import pipeline" 2>/dev/null || need=1
@@ -64,11 +71,11 @@ ensure_modelscope() {
     "$py" -c "import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), '←', modelscope.__file__); print('[OK] python', sys.executable)"
     return 0
   fi
-  echo "[INFO] 安装 modelscope[audio] + funasr → $py"
-  "$py" -m pip install -U "modelscope[audio]" funasr kaldiio addict huggingface_hub "${mirror[@]}" \
-    || "$py" -m pip install -U modelscope funasr kaldiio addict huggingface_hub "${mirror[@]}" || {
-    echo "[ERR] modelscope/audio 安装失败。手动:"
-    echo "      $py -m pip install -U 'modelscope[audio]' funasr kaldiio"
+  echo "[INFO] 安装固定 modelscope + funasr（不使用 audio extra）→ $py"
+  "$py" -m pip install \
+    modelscope==1.39.1 funasr==1.4.6 kaldiio==2.18.1 addict==2.4.0 \
+    "${constraints[@]}" "${mirror[@]}" || {
+    echo "[ERR] modelscope/funasr 安装失败；请从仓库根重跑 bash ./setup_env.sh"
     return 1
   }
   "$py" -c "from modelscope.pipelines import pipeline; import modelscope,sys; print('[OK] modelscope', getattr(modelscope,'__version__','?'), 'pipeline OK'); print('[OK] python', sys.executable)"

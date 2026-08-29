@@ -1,4 +1,6 @@
-# VE 问题定义与分阶决策
+# VE 问题定义与分阶决策（main 分支历史参考）
+
+> **分支边界：** `extract@sep` 不执行 VE/Presence/比赛评测。当前 KWS 分离流程见 [仓库根 README](../README.md)；本文中的历史数值不能直接作为当前生产证据。
 
 本文是项目的**问题导向**文档：先固定要解什么、用什么指标、已有证据说了什么，再规定每一阶实验的 Go/No-Go。实现细节见 `README.md` / `AUTODL.md`；端到端怎么跑见 [`EXPERIMENTS.md`](EXPERIMENTS.md)。
 

@@ -1,13 +1,3 @@
-numpy>=1.23
-soundfile>=0.12
-librosa>=0.10
-pyyaml>=6.0
-tqdm>=4.65
-editdistance>=0.6
-modelscope[audio]>=1.14
-funasr>=1.0
-kaldiio>=0.9
-huggingface_hub>=0.20
-addict>=2.4.0
-# Presence：ERes2NetV2 走 ModelScope audio pipeline，须装进 PYTHON_BIN（conda env ve）
-# MossFormer ORT GPU 库见 requirements_moss_ort.txt（download_moss_onnx.sh / setup_env 安装）
+# 兼容入口；VE 与仓库根流程共用同一 cu124 环境。
+-c ../environment/constraints-cu124.txt
+-r ../environment/requirements-cu124.txt

@@ -1,4 +1,6 @@
-# asr_probe：全量 pos/neg × 流 ASR
+# asr_probe：全量 pos/neg × 流 ASR（main 分支历史参考）
+
+> 本工具属于 VE/CMD 诊断，不在 `extract@sep` 执行。sep 分支的 KWS ASR/CER 链见 [TECHNICAL_FLOW.md](../../TECHNICAL_FLOW.md)。
 
 **不做拒识、不跑 TSE。** 对每条 CMD 的 mix / 一次分离 / 级联分离轨跑 Qwen3-ASR，写出 jsonl + 分析 JSON。
 

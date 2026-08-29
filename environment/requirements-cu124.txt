@@ -1,0 +1,42 @@
+# 非 PyTorch 部分的统一环境直接依赖。
+# 安装入口只有一个：bash ./setup_env.sh
+
+# 分离 / ASR / ONNX
+onnxruntime-gpu==1.20.2
+clearvoice==0.1.2
+qwen-asr==0.0.6
+transformers==4.57.6
+accelerate==1.12.0
+nagisa==0.2.11
+soynlp==0.0.493
+
+# Presence / VE 与 ASR 回退，也统一到同一解释器
+# 不用 modelscope[audio] extra：它锁 librosa==0.10.1，与 ClearVoice 冲突。
+modelscope==1.39.1
+funasr==1.4.6
+kaldiio==2.18.1
+addict==2.4.0
+
+# 音频 / 数值 / CER
+numpy==1.26.4
+scipy==1.15.3
+soxr==1.1.0
+soundfile==0.12.1
+librosa==0.10.2.post1
+audioread==3.0.1
+editdistance==0.8.1
+pypinyin==0.55.0
+
+# DAE-TSE 运行时（wesep / kce 源码另装）
+PyYAML==6.0.3
+fire==0.7.1
+g2p-en==2.1.0
+
+# 通用工具
+tqdm==4.70.0
+packaging==26.1
+huggingface-hub==0.36.2
+sentencepiece==0.2.1
+protobuf==6.33.5
+safetensors==0.8.0
+einops==0.8.2

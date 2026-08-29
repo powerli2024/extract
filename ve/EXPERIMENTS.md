@@ -1,4 +1,6 @@
-# VE 分阶实验（AutoDL，现有开关）
+# VE 分阶实验（main 分支历史参考）
+
+> **不要在 `extract@sep` 执行本文命令。** 本分支只做 KWS 分离，入口见 [仓库根 README](../README.md)。本文保留用于追溯 `main` 分支实验设计，所有结论在复用前都要以 main 当前代码和严格全量评测刷新。
 
 对照 [`PROBLEM.md`](PROBLEM.md)。**不改脚本**；只列环境变量。一次只动一个因子。
 
@@ -190,22 +192,6 @@ VE_OUT=/root/autodl-tmp/ve_mix_novad ./run_next_lift.sh t3
 
 接入 extract（过门后）：`VETO_CAMP=1`，可选 `VETO_WINDOWS=1`。与叠话长句加拒合取。禁止救援 FN。  
 **Go：** holdout test Δcontest ≥ 0.005 且额外 pos 误拒 ≤ 5。
-
-### T5 — Cond-TasNet（同一 Presence 门，只换提取）
-
-复用 `ve_mix_novad` 的决策，不对 `ve_mix_novad` 写回。条件向量用 **ECAPA**（与训练一致），不是 eres。
-
-```bash
-# 权重: /root/autodl-tmp/ve_models/cond_tasnet/best.pt  或 COND_TASNET_CKPT
-# ECAPA:  /root/autodl-tmp/ve_models/ecapa  或 pip 拉 speechbrain
-unset ASR_LANGUAGE ASR_DOMAIN_CONTEXT ASR_HOTWORDS
-./run_next_lift.sh t5
-# → /root/autodl-tmp/ve_condtasnet_novad/reports/asr_cer/summary.md
-```
-
-**Go：** 含叠话加拒的真实 contest ≥ 锁定 0.739 + 0.005。否则保持 mix。
-
----
 
 ## 禁止（与 PROBLEM.md §5 一致）
 

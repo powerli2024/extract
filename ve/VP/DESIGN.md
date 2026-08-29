@@ -1,4 +1,6 @@
-# VP 实验设计
+# VP 实验设计（main 分支历史参考）
+
+> 本文用于解释历史 Voice Presence 实验，不是 `extract@sep` 操作手册。sep 的改进和独立验收边界见 [IMPROVEMENTS.md](../../IMPROVEMENTS.md)。
 
 ## 0. 问题边界
 
