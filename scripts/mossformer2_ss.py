@@ -167,7 +167,10 @@ def separate_one(cv, wav_path, out1, out2, sr, max_sec=0):
         audio = audio.reshape(1, -1)
 
     def _run():
-        output_wav = cv(audio, False)
+        # ClearVoice 仅用于前向推理；禁止构建 autograd graph，降低长音频
+        # 和 batch 分离时的显存占用。OOM 重试也会复用同一推理上下文。
+        with torch.inference_mode():
+            output_wav = cv(audio, False)
         arr = np.asarray(output_wav)
         s1, s2 = split_two_speaker(arr)
         sf.write(out1, s1.astype(np.float32), sr)
@@ -645,7 +648,11 @@ class MossFormer2Separator:
         self, wav: np.ndarray, sr: int, max_sec: float = 0.0
     ) -> tuple[np.ndarray, np.ndarray]:
         audio = wav.reshape(1, -1).astype(np.float32)
-        output_wav = self._cv(audio, False)
+        # 与 daemon 路径保持一致：ClearVoice 不需要梯度或 autograd graph。
+        import torch
+
+        with torch.inference_mode():
+            output_wav = self._cv(audio, False)
         arr = np.asarray(output_wav)
         from sep_common import split_two_speaker_wav
 
