@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from audio_io import empty_cuda_cache, is_oom, peak_normalize, truncate_wav
+from audio_io import empty_cuda_cache, is_oom, peak_normalize, preprocess_for_separation, truncate_wav
 from paths import default_model_dir, default_ps4_weights, setup_sys_path
 
 setup_sys_path()
@@ -134,7 +134,7 @@ class PS4Extractor:
     ) -> tuple[np.ndarray, dict[str, Any]]:
         import torch
 
-        mix = np.asarray(mixture, dtype=np.float32).reshape(-1)
+        mix, sr = preprocess_for_separation(mixture, sr, peak=self.peak)
         enr = np.asarray(enroll, dtype=np.float32).reshape(-1)
         if self.peak_norm_cmd:
             mix = peak_normalize(mix, peak=self.peak)

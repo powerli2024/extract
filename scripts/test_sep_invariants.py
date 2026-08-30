@@ -20,6 +20,7 @@ from sep_common import (  # noqa: E402
     separate_one_with_oom_retry,
     split_two_speaker_wav,
 )
+from utils_audio import preprocess_for_separation  # noqa: E402
 from stage_resume import stage_complete  # noqa: E402
 from gate_policy import build_gate_plan  # noqa: E402
 from audit_sep_run import check_index  # noqa: E402
@@ -44,6 +45,20 @@ def test_split_two_speaker_speakers_batch_time() -> None:
     arr = np.stack([spk1, spk2], axis=0)[:, None, :]  # (2, 1, T)
     a, b = split_two_speaker_wav(arr)
     assert np.allclose(a, spk1) and np.allclose(b, spk2)
+
+
+def test_separation_preprocess_contract() -> None:
+    # (T,C) input with out-of-range amplitude and 8 kHz source rate.
+    source = np.array(
+        [[2.0, -2.0], [0.5, 0.25], [-1.5, 1.5], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+    wave, sr = preprocess_for_separation(source, 8000)
+    assert sr == 16000
+    assert wave.ndim == 1 and len(wave) == 8
+    assert np.isfinite(wave).all()
+    assert float(np.max(np.abs(wave))) <= 0.70 + 1e-6
+    assert np.isclose(float(np.max(np.abs(wave))), 0.70, atol=1e-5)
 
 
 def test_kws_chinese_uses_pinyin_cer_not_strict_char_cer() -> None:

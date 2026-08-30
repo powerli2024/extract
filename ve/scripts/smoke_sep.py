@@ -74,7 +74,7 @@ def main() -> int:
 
     sr = 16000
     if args.wav is not None:
-        from audio_io import load_audio
+        from audio_io import load_audio, preprocess_for_separation
 
         if not args.wav.is_file():
             print(f"[FAIL] wav 不存在: {args.wav}")
@@ -90,6 +90,7 @@ def main() -> int:
 
     t1 = time.time()
     try:
+        mix, sr = preprocess_for_separation(mix, sr)
         s1, s2 = sep.separate(mix, sr=sr)
     except Exception as e:
         print(f"[FAIL] separate() 异常: {e}")

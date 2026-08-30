@@ -8,7 +8,7 @@
 16 kHz 单声道波形 + 已知唤醒文本的音素 cue → 一条目标语音
 ```
 
-交接包提供了正式调用逻辑和辅助源码，但不包含 DAE-TSE 主仓、WeSep 运行环境、recipe 配置或模型权重。已记录的上游版本为 `GnafiY/DAE-TSE@b306b2ac70e33a95047f9366cc9bb5fde29c0de6`，中文权重 `model.pt` 约 221 MB。
+AutoDL 上的官方 DAE-TSE 主仓固定使用 `/root/DAE-TSE`；参考链的中文 cue helper、recipe 配置和中文权重仍放在 `/root/autodl-fs/midea-dae` 外部资产目录。当前本地克隆版本为 `9799ec6f04b3547bf891c95644e78dfd37d5d7a1`，中文权重 `model.pt` 由 challengecup 资产提供。
 
 因此本仓采用“单环境、候选流程隔离”：
 
@@ -18,6 +18,10 @@
 - 输出固定放在 `$VM_OUT/experiments/`，现有 handoff 不会发现它；
 - 报告始终写 `production_approved=false`，直到声纹和下游严格评测通过。
 
+DAE-TSE 默认禁用：普通 `run_sep.sh`、ClearVoice/ONNX 分离和环境构建均不会
+自动调用 DAE。只有显式执行 `run_dae_tse.sh`，并准备好中文 helper、recipe
+配置和 checkpoint，才会启动该候选实验。
+
 统一环境的版本清单、构建命令和验收见 [environment/README_CUDA124.md](environment/README_CUDA124.md)。DAE-TSE 官方环境为 PyTorch 2.9.1+cu126；本项目为满足 CUDA 12.4 使用 2.6.0+cu124，必须通过真实 checkpoint smoke 后才允许进入效果评测。
 
 ## 2. 代码结构
@@ -25,6 +29,7 @@
 | 文件 | 职责 |
 |---|---|
 | `scripts/candidate_sources.py` | 解析 raw/s1–s8 的冻结 source、音频 hash 和实验签名 |
+| `scripts/dae_cue_loader.py` | 发现并加载 challengecup 中文 cue helper |
 | `scripts/dae_tse_infer_manifest.py` | 在 DAE 专用环境中构建模型、文本转 cue、逐条推理 |
 | `scripts/stage_dae_tse.py` | 生成 manifest、调用 DAE、严格检查时长、统一重算 source/DAE CER |
 | `run_dae_tse.sh` | AutoDL 入口；不进入 `run_sep.sh` 默认阶段 |
@@ -34,13 +39,33 @@
 
 ```text
 /root/miniconda3/envs/ve-cu124/bin/python
-/root/autodl-tmp/projects/DAE-TSE/
+/root/DAE-TSE/
   examples/librimix/dae-tse/exp/backbone/config.yaml
-  tools/build_zh_text_cues.py
+/root/autodl-fs/midea-dae/code/DAE-TSE/tools/build_zh_text_cues.py
 /root/autodl-fs/midea-dae/models/dae_zh_v1/model.pt
 ```
 
-统一 Python 必须能导入 `torch`、`yaml`、`soundfile`、`wesep`、`kce` 和 DAE 仓内的 `tools.build_zh_text_cues`。构建入口固定为 `bash ./setup_env.sh`，不要再维护独立 `dae-tse` 或 `qwen3-asr` 环境。
+`config.yaml` 中 `model_args.tse_model.asr_encoder.checkpoint_path` 及其同目录
+`model.yaml`/`data.yaml` 必须能读取 challengecup 使用的中文 KCE；`model.pt`
+应是参考链训练得到的完整 DAE checkpoint，而不是英文 demo 的
+`checkpoint_150.pt`。
+
+### 中文 cue helper 的来源核对
+
+截至 2026-08-30，对两个本地仓库的工作树和 Git 跟踪文件核对结果如下：
+
+| 仓库 | `tools/build_zh_text_cues.py` | 实际情况 |
+|---|---|---|
+| `D:\gpt\DAE-TSE`（AutoDL `/root/DAE-TSE`） | 不存在 | 只带英文 LibriMix 的 `local/text2phoneme.py`、`phoneme2int.txt` 和 `word2lexicon.txt` |
+| `D:\gpt\voice-interaction-challengecup` | 不存在 | 仅在 `local_runtime_helpers/DAE-TSE/evaluate_kws_model_v2_baseline.py` 中引用 `tools.build_zh_text_cues` |
+
+因此这个中文 helper 不是上游 DAE-TSE 或 challengecup 交接包内的文件，而是参考链部署时的外部中文资产（通常位于
+`/root/autodl-fs/midea-dae/code/DAE-TSE/tools/`）。不能把官方仓库的英文
+`text2phoneme.py` 当作中文 helper：它使用 `g2p_en`，输出的是英文 ARPAbet
+词典，和中文 KCE 的 phone-id 映射不兼容。当前接入会在运行前自动探测该外部
+helper；找不到时明确失败，不会把英文 cue 静默送入中文 checkpoint。
+
+统一 Python 必须能导入 `torch`、`yaml`、`soundfile`、`wesep`、`kce`；中文 helper 由 `DAE_TSE_CUE_HELPER` 显式指定，或自动探测 `/root/autodl-fs/midea-dae/code/DAE-TSE/tools/build_zh_text_cues.py`。构建入口固定为 `bash ./setup_env.sh`，不要再维护独立 `dae-tse` 或 `qwen3-asr` 环境。
 
 `DAE_TSE_REPO` 必须保留 Git 元数据；commit、tracked dirty diff、DAE Python 版本、配置和权重 SHA256 都会进入实验签名。若只有无 `.git` 的源码副本，应先恢复为固定 commit 的克隆，而不是关闭签名检查。
 
@@ -48,14 +73,19 @@
 
 ```bash
 source /root/extract-sep/env.sh
+export DAE_TSE_CUE_HELPER="${DAE_TSE_CUE_HELPER:-/root/autodl-fs/midea-dae/code/DAE-TSE/tools/build_zh_text_cues.py}"
 "$PYTHON_BIN" - <<'PY'
-import soundfile, torch, yaml, wesep
-from tools.build_zh_text_cues import text_to_phone_labels
+import importlib.util, os, soundfile, torch, yaml, wesep
+helper = os.environ["DAE_TSE_CUE_HELPER"]
+spec = importlib.util.spec_from_file_location("dae_cues", helper)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.text_to_phone_labels("你好")
 print("DAE runtime imports OK", torch.cuda.is_available())
 PY
 ```
 
-执行预检前应 `cd /root/autodl-tmp/projects/DAE-TSE`，确保本仓 `tools` 可导入。
+执行预检前应确认 `DAE_TSE_CUE_HELPER` 可读；官方 `/root/DAE-TSE` 克隆本身不包含中文 helper。
 
 ## 4. 推荐实验顺序
 
@@ -67,7 +97,8 @@ source ./env.sh
 
 export VM_OUT=/root/autodl-tmp/kws_sep_dedup
 export DAE_PYTHON_BIN="$PYTHON_BIN"
-export DAE_TSE_REPO=/root/autodl-tmp/projects/DAE-TSE
+export DAE_TSE_REPO=/root/DAE-TSE
+export DAE_TSE_CUE_HELPER=/root/autodl-fs/midea-dae/code/DAE-TSE/tools/build_zh_text_cues.py
 export DAE_TSE_CHECKPOINT=/root/autodl-fs/midea-dae/models/dae_zh_v1/model.pt
 export DAE_SOURCE_STAGE=s1
 export DAE_OUT=/root/autodl-tmp/kws_sep_dae_s1_v1

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from audio_io import cosine_sim, peak_normalize
+from audio_io import cosine_sim, preprocess_for_separation
 from presence_encoder import PresenceEncoder
 
 
@@ -22,7 +22,7 @@ class SepRouteExtractor:
         *,
         encoder: PresenceEncoder | None = None,
         device: str = "cuda:0",
-        peak: float = 0.95,
+        peak: float = 0.70,
     ):
         if separator is None:
             raise ValueError("SepRouteExtractor 需要 separator")
@@ -34,7 +34,7 @@ class SepRouteExtractor:
 
     def _separate(self, mixture: np.ndarray, sr: int) -> dict[str, np.ndarray]:
         mix = np.asarray(mixture, dtype=np.float32).reshape(-1)
-        peak = peak_normalize(mix, peak=self.peak)
+        peak, sr = preprocess_for_separation(mix, sr, peak=self.peak)
         streams: dict[str, np.ndarray] = {"mix": mix, "peak": peak}
         if hasattr(self.separator, "separate"):
             s1, s2 = self.separator.separate(peak, sr=sr)

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils_audio import load_audio, peak_normalize, save_audio
+from utils_audio import load_audio, peak_normalize, preprocess_for_separation, save_audio
 
 _DAEMON_CODE = r"""
 import json, sys, os, traceback, gc
@@ -637,7 +637,7 @@ class MossFormer2Separator:
         sr: int = 16000,
         max_sec: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray]:
-        wav = peak_normalize(np.asarray(wav, dtype=np.float32), peak=self.peak)
+        wav, sr = preprocess_for_separation(wav, sr, peak=self.peak)
         if self._mode == "inprocess":
             return self._separate_inprocess(wav, sr, max_sec=max_sec)
         if self._mode == "subprocess":
@@ -751,7 +751,7 @@ class MossFormer2Separator:
                 td_p = Path(td)
                 items = []
                 for i, wav in enumerate(wavs):
-                    wav = peak_normalize(np.asarray(wav, dtype=np.float32), peak=self.peak)
+                    wav, _ = preprocess_for_separation(wav, sr, peak=self.peak)
                     in_wav = td_p / f"in_{i}.wav"
                     out1 = td_p / f"spk1_{i}.wav"
                     out2 = td_p / f"spk2_{i}.wav"

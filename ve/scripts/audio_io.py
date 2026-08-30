@@ -95,6 +95,29 @@ def peak_normalize(wav: np.ndarray, peak: float = 0.95) -> np.ndarray:
     return (wav * (peak / p)).astype(np.float32)
 
 
+def preprocess_for_separation(
+    wav: np.ndarray,
+    sr: int,
+    *,
+    target_sr: int = 16000,
+    peak: float = 0.70,
+) -> tuple[np.ndarray, int]:
+    """统一分离输入：多声道平均 → 16 kHz → clip [-1,1] → peak=0.70。"""
+    x = np.asarray(wav, dtype=np.float32)
+    if x.ndim == 2:
+        axis = 0 if x.shape[0] <= 8 and x.shape[1] > x.shape[0] else 1
+        x = x.mean(axis=axis)
+    x = x.reshape(-1)
+    if x.size == 0 or not np.isfinite(x).all():
+        raise ValueError("separation input must be non-empty and finite")
+    x = np.clip(x, -1.0, 1.0)
+    if int(sr) != int(target_sr):
+        x = resample_wav(x, int(sr), int(target_sr), method="librosa_default")
+    x = np.clip(x, -1.0, 1.0)
+    x = peak_normalize(x, peak=float(peak))
+    return np.clip(x, -1.0, 1.0).astype(np.float32), int(target_sr)
+
+
 def truncate_wav(wav: np.ndarray, sr: int, max_sec: float) -> np.ndarray:
     if max_sec <= 0:
         return wav

@@ -31,6 +31,31 @@ def peak_normalize(wav: np.ndarray, peak: float = 0.7) -> np.ndarray:
     return (wav * (peak / p)).astype(np.float32)
 
 
+def preprocess_for_separation(
+    wav: np.ndarray,
+    sr: int,
+    *,
+    target_sr: int = 16000,
+    peak: float = 0.70,
+) -> tuple[np.ndarray, int]:
+    """统一分离输入：多声道平均 → 16 kHz → clip [-1,1] → peak=0.70。"""
+    x = np.asarray(wav, dtype=np.float32)
+    if x.ndim == 2:
+        # soundfile 常见布局为 (T,C)，少数调用方使用 (C,T)。
+        axis = 0 if x.shape[0] <= 8 and x.shape[1] > x.shape[0] else 1
+        x = x.mean(axis=axis)
+    x = x.reshape(-1)
+    if x.size == 0 or not np.isfinite(x).all():
+        raise ValueError("separation input must be non-empty and finite")
+    x = np.clip(x, -1.0, 1.0)
+    if int(sr) != int(target_sr):
+        x = librosa.resample(x, orig_sr=int(sr), target_sr=int(target_sr))
+        x = np.asarray(x, dtype=np.float32)
+    x = np.clip(x, -1.0, 1.0)
+    x = peak_normalize(x, peak=float(peak))
+    return np.clip(x, -1.0, 1.0).astype(np.float32), int(target_sr)
+
+
 def preprocess_audio(wav: np.ndarray, peak: float = 0.7) -> np.ndarray:
     if wav.dtype != np.float32:
         wav = wav.astype(np.float32)

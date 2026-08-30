@@ -163,4 +163,7 @@ python scripts/analyze_dual_zero.py --pos-neg "$VM_OUT"
 
 ## 9. 可选 DAE-TSE
 
-DAE-TSE 与主流程共用 `ve-cu124` Python，但仍是隔离的可选候选，不属于 `./run_sep.sh` 的资产硬依赖。s1–s8 全量审计通过后，再按 [DAE_TSE.md](DAE_TSE.md) 使用新的 `DAE_OUT` 运行；不得把 smoke 目录续成正式结果，也不得手工把实验 WAV 塞进 `best_sep`。
+DAE-TSE 默认禁用，不属于 `./run_sep.sh` 的资产硬依赖；只有显式执行
+`run_dae_tse.sh` 才会启动候选实验。普通分离在模型调用前统一执行多声道平均、
+16 kHz 重采样、`[-1,1]` 限幅和峰值 `0.70` 归一化。DAE 细节见
+[DAE_TSE.md](DAE_TSE.md)；其输出仍不得手工塞入 `best_sep`。

@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from audio_io import peak_normalize
+from audio_io import peak_normalize, preprocess_for_separation
 from cond_tasnet_model import CondTasNetInferencer
 from paths import default_cond_tasnet_ckpt, default_ecapa_dir
 
@@ -82,9 +82,9 @@ class CondTasNetExtractor:
         max_sec: float = 0.0,
         **_kwargs: Any,
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        del sr, max_sec
-        mix = np.asarray(mixture, dtype=np.float32).reshape(-1)
-        enr = np.asarray(enroll, dtype=np.float32).reshape(-1)
+        del max_sec
+        mix, sr = preprocess_for_separation(mixture, sr, peak=self.peak)
+        enr, _ = preprocess_for_separation(enroll, sr, peak=self.peak)
         emb = self._embed(enr)
         est = self.infer.separate(mix, emb).numpy().astype(np.float32).reshape(-1)
         out = peak_normalize(est, peak=self.peak)

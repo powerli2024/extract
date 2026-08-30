@@ -39,7 +39,7 @@ from stage_resume import (
 )
 
 setup_sys_path()
-from utils_audio import load_audio, save_audio  # noqa: E402
+from utils_audio import load_audio, preprocess_for_separation, save_audio  # noqa: E402
 
 
 class MissingParentWavError(FileNotFoundError):
@@ -158,6 +158,7 @@ def _run_thr_subset(
                         f"缺少父阶段 peak wav: {pp}（gated 禁止回退 kws 一阶）"
                     )
                 peak_wav, sr = load_audio(pp, 16000)
+                peak_wav, sr = preprocess_for_separation(peak_wav, sr)
                 s1, s2 = separate_one_with_oom_retry(sep, peak_wav, sr, max_sep_sec)
                 for t, w in (("peak", peak_wav), ("spk1", s1), ("spk2", s2)):
                     save_audio(wav_path(out_root, uid, t), w, sr)
@@ -171,6 +172,9 @@ def _run_thr_subset(
                 peak_wav, sr = load_audio(p_peak, 16000)
                 s1, _ = load_audio(p1, 16000)
                 s2, _ = load_audio(p2, 16000)
+                peak_wav, sr = preprocess_for_separation(peak_wav, sr)
+                s1, _ = preprocess_for_separation(s1, sr)
+                s2, _ = preprocess_for_separation(s2, sr)
                 save_audio(wav_path(out_root, uid, "peak"), peak_wav, sr)
                 save_audio(wav_path(out_root, uid, "spk1"), s1, sr)
                 save_audio(wav_path(out_root, uid, "spk2"), s2, sr)

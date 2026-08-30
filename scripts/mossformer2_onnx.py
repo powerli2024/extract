@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils_audio import load_audio, peak_normalize, save_audio
+from utils_audio import load_audio, peak_normalize, preprocess_for_separation, save_audio
 
 # ── ONNX Runtime 懒加载 ──
 _ORT_AVAILABLE = False
@@ -347,7 +347,7 @@ class MossFormer2Separator:
         -------
         (spk1, spk2) : tuple[np.ndarray, np.ndarray]
         """
-        wav = peak_normalize(np.asarray(wav, dtype=np.float32), peak=self.peak)
+        wav, sr = preprocess_for_separation(wav, sr, peak=self.peak)
         session = self._get_session()
         return self._run_onnx(session, wav)
 
@@ -429,7 +429,7 @@ class MossFormer2Separator:
             session = self._sessions[0]
             for w in wavs:
                 try:
-                    w_proc = peak_normalize(np.asarray(w, dtype=np.float32), peak=self.peak)
+                    w_proc, _ = preprocess_for_separation(w, sr, peak=self.peak)
                     out.append(self._run_onnx(session, w_proc))
                 except Exception as e:
                     out.append(e)
@@ -441,7 +441,7 @@ class MossFormer2Separator:
         def _prep_and_run(idx_and_wav: tuple[int, np.ndarray]) -> tuple[int, object]:
             i, w = idx_and_wav
             try:
-                w_proc = peak_normalize(np.asarray(w, dtype=np.float32), peak=self.peak)
+                w_proc, _ = preprocess_for_separation(w, sr, peak=self.peak)
                 session = self._get_session()
                 return (i, self._run_onnx(session, w_proc))
             except Exception as e:

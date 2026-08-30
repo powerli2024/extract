@@ -9,15 +9,52 @@ source "$ROOT/paths_defaults.sh"
 source "$ROOT/pick_python.sh"
 
 DAE_PYTHON_BIN="${DAE_PYTHON_BIN:-$PYTHON_BIN}"
-DAE_TSE_REPO="${DAE_TSE_REPO:-/root/autodl-tmp/projects/DAE-TSE}"
-DAE_TSE_CONFIG="${DAE_TSE_CONFIG:-$DAE_TSE_REPO/examples/librimix/dae-tse/exp/backbone/config.yaml}"
+DAE_TSE_REPO="${DAE_TSE_REPO:-/root/DAE-TSE}"
+DAE_TSE_CONFIG="${DAE_TSE_CONFIG:-}"
 DAE_TSE_CHECKPOINT="${DAE_TSE_CHECKPOINT:-/root/autodl-fs/midea-dae/models/dae_zh_v1/model.pt}"
+DAE_TSE_CUE_HELPER="${DAE_TSE_CUE_HELPER:-}"
 DAE_SOURCE_STAGE="${DAE_SOURCE_STAGE:-s1}"
 DAE_SOURCE_THR="${DAE_SOURCE_THR:-}"
 DAE_OUT="${DAE_OUT:-$VM_OUT/experiments/dae_tse_from_${DAE_SOURCE_STAGE}${DAE_SOURCE_THR:+_thr_$DAE_SOURCE_THR}}"
 LIMIT="${LIMIT:-0}"
 DEVICE="${DEVICE:-cuda:0}"
 DAE_INPUT_PEAK="${DAE_INPUT_PEAK:-0.70}"
+
+if [[ -z "$DAE_TSE_CONFIG" || ! -f "$DAE_TSE_CONFIG" ]]; then
+  for candidate in \
+    "$DAE_TSE_REPO/examples/librimix/dae-tse/exp/backbone/config.yaml" \
+    "/root/autodl-fs/midea-dae/code/DAE-TSE/examples/librimix/dae-tse/exp/backbone/config.yaml" \
+    "/root/autodl-tmp/projects/DAE-TSE/examples/librimix/dae-tse/exp/backbone/config.yaml"
+  do
+    if [[ -f "$candidate" ]]; then
+      DAE_TSE_CONFIG="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$DAE_TSE_CONFIG" || ! -f "$DAE_TSE_CONFIG" ]]; then
+  echo "[ERR ] DAE-TSE config not found; set DAE_TSE_CONFIG to a Chinese recipe config.yaml" >&2
+  exit 1
+fi
+
+if [[ ! -f "$DAE_TSE_CHECKPOINT" ]]; then
+  for candidate in \
+    "/root/autodl-fs/midea-dae/models/dae_zh_v1/model.pt" \
+    "/root/autodl-fs/midea-dae/models/model.pt" \
+    "$DAE_TSE_REPO/models/dae_zh_v1/model.pt"
+  do
+    if [[ -f "$candidate" ]]; then
+      DAE_TSE_CHECKPOINT="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ ! -f "$DAE_TSE_CHECKPOINT" ]]; then
+  echo "[ERR ] Chinese DAE checkpoint not found; set DAE_TSE_CHECKPOINT to model.pt" >&2
+  exit 1
+fi
 
 if [[ ! -f "$VM_OUT/pos/meta/items.jsonl" || ! -f "$VM_OUT/neg/meta/items.jsonl" ]]; then
   echo "[INFO] collect metadata first"
@@ -38,6 +75,7 @@ ARGS=(
   --limit "$LIMIT"
 )
 [[ -n "$DAE_SOURCE_THR" ]] && ARGS+=(--source-thr "$DAE_SOURCE_THR")
+[[ -n "$DAE_TSE_CUE_HELPER" ]] && ARGS+=(--dae-cue-helper "$DAE_TSE_CUE_HELPER")
 
 echo "[INFO] optional DAE-TSE candidate; default handoff remains unchanged"
 echo "[INFO] source=$DAE_SOURCE_STAGE thr=${DAE_SOURCE_THR:--} out=$DAE_OUT"

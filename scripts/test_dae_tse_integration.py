@@ -11,6 +11,7 @@ import numpy as np
 import soundfile as sf
 
 from candidate_sources import resolve_candidate_sources, write_signature
+from dae_cue_loader import load_text_to_phone_labels, resolve_cue_helper
 from export_kws_handoff import discover_indexes
 from paths import STAGE_DIRS
 from stage_dae_tse import assert_isolated_out_dir
@@ -120,7 +121,22 @@ def test_handoff_uses_frozen_stage_allowlist() -> None:
         write_jsonl(official / "index.jsonl", [{"uid": "pos_0"}])
         write_jsonl(experiment / "index.jsonl", [{"uid": "pos_0"}])
         found = discover_indexes(split_root)
-        assert [label for label, _ in found] == [STAGE_DIRS["s1"]]
+    assert [label for label, _ in found] == [STAGE_DIRS["s1"]]
+
+
+def test_external_chinese_cue_helper_resolution() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        helper = root / "tools" / "build_zh_text_cues.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text(
+            "def text_to_phone_labels(text):\n"
+            "    return [[11, 12]], []\n",
+            encoding="utf-8",
+        )
+        resolved = resolve_cue_helper(root / "DAE-TSE", helper)
+        mapper = load_text_to_phone_labels(resolved)
+        assert mapper("你好") == ([[11, 12]], [])
 
 
 def main() -> None:
@@ -130,6 +146,7 @@ def main() -> None:
         test_signature_refuses_mixed_resume,
         test_dae_output_cannot_pollute_handoff_tree,
         test_handoff_uses_frozen_stage_allowlist,
+        test_external_chinese_cue_helper_resolution,
     ]
     for test in tests:
         test()

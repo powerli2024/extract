@@ -7,6 +7,7 @@ import argparse
 import importlib
 import importlib.metadata
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -31,6 +32,11 @@ EXPECTED = {
     "soundfile": "0.12.1",
 }
 
+DEFAULT_DAE_CUE_ROOTS = (
+    Path("/root/autodl-fs/midea-dae/code/DAE-TSE"),
+    Path("/root/autodl-tmp/projects/DAE-TSE"),
+)
+
 
 def package_version(name: str) -> str:
     return importlib.metadata.version(name)
@@ -39,6 +45,7 @@ def package_version(name: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dae-repo", type=Path)
+    parser.add_argument("--dae-cue-helper", type=Path)
     parser.add_argument("--dae-config", type=Path)
     parser.add_argument("--dae-checkpoint", type=Path)
     parser.add_argument("--json-out", type=Path)
@@ -111,11 +118,33 @@ def main() -> int:
     dae_status: dict[str, object] = {"requested": bool(args.dae_repo)}
     if args.dae_repo:
         repo = args.dae_repo.resolve()
-        required = [repo / "pyproject.toml", repo / "tools" / "build_zh_text_cues.py"]
+        helper_candidates = []
+        if args.dae_cue_helper:
+            helper_candidates.append(args.dae_cue_helper)
+        env_helper = os.environ.get("DAE_TSE_CUE_HELPER", "").strip()
+        if env_helper:
+            helper_candidates.append(Path(env_helper))
+        helper_candidates.append(repo / "tools" / "build_zh_text_cues.py")
+        helper_candidates.extend(
+            root / "tools" / "build_zh_text_cues.py"
+            for root in DEFAULT_DAE_CUE_ROOTS
+        )
+        cue_helper = next(
+            (path.expanduser().resolve() for path in helper_candidates if path.is_file()),
+            None,
+        )
+        required = [repo / "pyproject.toml"]
         if args.dae_config:
             required.append(args.dae_config.resolve())
         if args.dae_checkpoint:
             required.append(args.dae_checkpoint.resolve())
+        if cue_helper is None:
+            required.append(repo / "tools" / "build_zh_text_cues.py")
+        else:
+            dae_status["cue_helper"] = str(cue_helper)
+            dae_status["cue_helper_candidates"] = [
+                str(path.expanduser().resolve()) for path in helper_candidates
+            ]
         missing = [str(path) for path in required if not path.is_file()]
         dae_status["repo"] = str(repo)
         dae_status["missing_assets"] = missing
@@ -134,10 +163,15 @@ def main() -> int:
                     [
                         sys.executable,
                         "-c",
-                        "from tools.build_zh_text_cues import text_to_phone_labels; "
-                        "print(text_to_phone_labels('你好'))",
+                        (
+                            "import importlib.util, sys; "
+                            "p=sys.argv[1]; s=importlib.util.spec_from_file_location('dae_cues', p); "
+                            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                            "print(m.text_to_phone_labels('你好'))"
+                        ),
+                        str(cue_helper),
                     ],
-                    cwd=repo,
+                    cwd=str(cue_helper.parent.parent),
                     check=True,
                     capture_output=True,
                     text=True,

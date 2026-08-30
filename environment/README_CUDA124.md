@@ -18,7 +18,7 @@
 | 分离 | clearvoice 0.1.2 | `import clearvoice` 成功 |
 | ASR | qwen-asr 0.0.6、transformers 4.57.6、accelerate 1.12.0 | `import qwen_asr` 成功 |
 | Presence / 回退 | modelscope 1.39.1、funasr 1.4.6、kaldiio 2.18.1、addict 2.4.0 | 与主流程共用解释器 |
-| DAE-TSE | `GnafiY/DAE-TSE@b306b2a...` 的 `wesep` 与 `kce` | 与主流程共用 `PYTHON_BIN`；中文资产另验 |
+| DAE-TSE | `/root/DAE-TSE`（当前 `9799ec6...`）的 `wesep` 与 `kce` | 与主流程共用 `PYTHON_BIN`；中文 helper/资产另验 |
 | 系统工具 | ffmpeg、sox、git、libsndfile、zlib | 安装脚本预检 |
 | 可复现证据 | 完整包锁 + JSON 验证报告 | 每次构建后重新生成 |
 
@@ -62,7 +62,7 @@ VM_CONDA_ENV=ve-cu124-v2 VM_INSTALL_SYSTEM_PACKAGES=1 bash ./setup_env.sh
 
 ## 4. DAE-TSE 统一安装
 
-默认 `VM_INSTALL_DAE_TSE=1`，安装脚本会把固定 commit 的 `wesep` 与 `kce` 以 editable 模式装入 `ve-cu124`，并写入：
+默认 `VM_INSTALL_DAE_TSE=0`，先只构建主流程环境；DAE-TSE 默认禁用，不参与普通分离。明确要做 DAE 实验时再设置 `VM_INSTALL_DAE_TSE=1`，安装脚本会把 `wesep` 与 `kce` 以 editable 模式装入 `ve-cu124`，并写入：
 
 ```text
 PYTHON_BIN=/root/.../envs/ve-cu124/bin/python
@@ -73,7 +73,7 @@ DAE_PYTHON_BIN=$PYTHON_BIN
 已有 DAE 仓若 commit 不符或 tracked files 有修改，脚本不会覆盖它；默认跳过 DAE，硬门模式则停止。可用新路径重装：
 
 ```bash
-DAE_TSE_REPO=/root/autodl-tmp/projects/DAE-TSE-b306b2a bash ./setup_env.sh
+DAE_TSE_REPO=/root/DAE-TSE bash ./setup_env.sh
 ```
 
 默认情况下，DAE 源码或中文资产异常只会让 DAE 保持 `NO_GO`，不会阻塞 s1–s8 主环境。准备正式验证 DAE 时开启硬门：
@@ -86,10 +86,10 @@ DAE_TSE_CHECKPOINT=/实际路径/model.pt \
 bash ./setup_env.sh
 ```
 
-当前交接包缺少下面三类中文资产，因此“包可导入”不等于“DAE 可运行”：
+官方 `/root/DAE-TSE` 克隆只提供 WeSep/DAE 推理代码；`voice-interaction-challengecup` 也没有实际提交 `tools/build_zh_text_cues.py`，只是引用它。中文运行还需要下面三类外部资产，因此“包可导入”不等于“DAE 可运行”：
 
 ```text
-$DAE_TSE_REPO/tools/build_zh_text_cues.py
+$DAE_TSE_CUE_HELPER（参考链通常为 /root/autodl-fs/midea-dae/code/DAE-TSE/tools/build_zh_text_cues.py）
 中文 recipe 的 config.yaml（且其 KCE 路径有效）
 中文 DAE checkpoint model.pt
 ```
@@ -100,6 +100,7 @@ $DAE_TSE_REPO/tools/build_zh_text_cues.py
 source ./env.sh
 python environment/verify_cuda124.py \
   --dae-repo "$DAE_TSE_REPO" \
+  --dae-cue-helper "$DAE_TSE_CUE_HELPER" \
   --dae-config /实际路径/config.yaml \
   --dae-checkpoint /实际路径/model.pt \
   --require-dae

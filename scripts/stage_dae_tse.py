@@ -29,6 +29,7 @@ from candidate_sources import (
 )
 from paths import STAGE_DIRS, assert_split, default_vm_out
 from progress_log import StageProgress
+from dae_cue_loader import resolve_cue_helper
 
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-thr", default="", choices=["", "a", "b", "c"])
     parser.add_argument("--dae-python", type=Path, required=True)
     parser.add_argument("--dae-repo", type=Path, required=True)
+    parser.add_argument("--dae-cue-helper", type=Path, default=None)
     parser.add_argument("--dae-config", type=Path, required=True)
     parser.add_argument("--dae-checkpoint", type=Path, required=True)
     parser.add_argument("--asr-model-dir", type=Path, required=True)
@@ -129,7 +131,14 @@ def build_manifest(applicable: list[dict[str, Any]], out_dir: Path) -> list[dict
     return rows
 
 
-def signature_payload(args, all_rows, manifest, vm_out: Path, out_dir: Path) -> dict[str, Any]:
+def signature_payload(
+    args,
+    all_rows,
+    manifest,
+    vm_out: Path,
+    out_dir: Path,
+    cue_helper: Path,
+) -> dict[str, Any]:
     runtime_script = Path(__file__).with_name("dae_tse_infer_manifest.py")
     source_identity = [
         {
@@ -159,6 +168,10 @@ def signature_payload(args, all_rows, manifest, vm_out: Path, out_dir: Path) -> 
         "source_manifest_sha256": canonical_sha256(source_identity),
         "dae_python": python_runtime_fingerprint(args.dae_python.resolve()),
         "dae_repo": git_fingerprint(args.dae_repo.resolve()),
+        "dae_cue_helper": {
+            "path": str(cue_helper.resolve()),
+            "sha256": sha256_file(cue_helper),
+        },
         "dae_config": {
             "path": str(args.dae_config.resolve()),
             "sha256": sha256_file(args.dae_config),
@@ -187,6 +200,8 @@ def run_dae(args, manifest_path: Path, result_path: Path) -> None:
         str(manifest_path),
         "--dae-repo",
         str(args.dae_repo),
+        "--cue-helper",
+        str(args.dae_cue_helper),
         "--config",
         str(args.dae_config),
         "--checkpoint",
@@ -359,7 +374,8 @@ def main() -> None:
     manifest = build_manifest(applicable, out_dir)
     manifest_path = out_dir / "dae_manifest.jsonl"
     write_jsonl(manifest_path, manifest)
-    payload = signature_payload(args, all_rows, manifest, vm_out, out_dir)
+    args.dae_cue_helper = resolve_cue_helper(args.dae_repo.resolve(), args.dae_cue_helper)
+    payload = signature_payload(args, all_rows, manifest, vm_out, out_dir, args.dae_cue_helper)
     signature = write_signature(out_dir / "signature.json", payload)
     print(
         f"[INFO] DAE experiment out={out_dir} source={args.source_stage} "

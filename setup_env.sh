@@ -12,9 +12,12 @@ PYTHON_VERSION="${VM_PYTHON_VERSION:-3.10}"
 TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
 PIP_INDEX="${VM_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_TRUSTED="${VM_PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
-DAE_TSE_REPO="${DAE_TSE_REPO:-/root/autodl-tmp/projects/DAE-TSE}"
-DAE_TSE_COMMIT="${DAE_TSE_COMMIT:-b306b2ac70e33a95047f9366cc9bb5fde29c0de6}"
-INSTALL_DAE="${VM_INSTALL_DAE_TSE:-1}"
+DAE_TSE_REPO="${DAE_TSE_REPO:-/root/DAE-TSE}"
+DAE_TSE_COMMIT="${DAE_TSE_COMMIT:-9799ec6f04b3547bf891c95644e78dfd37d5d7a1}"
+DAE_TSE_CONFIG="${DAE_TSE_CONFIG:-$DAE_TSE_REPO/examples/librimix/dae-tse/exp/backbone/config.yaml}"
+DAE_TSE_CHECKPOINT="${DAE_TSE_CHECKPOINT:-/root/autodl-fs/midea-dae/models/dae_zh_v1/model.pt}"
+DAE_TSE_CUE_HELPER="${DAE_TSE_CUE_HELPER:-}"
+INSTALL_DAE="${VM_INSTALL_DAE_TSE:-0}"
 REQUIRE_DAE="${VM_REQUIRE_DAE_TSE:-0}"
 INSTALL_SYSTEM="${VM_INSTALL_SYSTEM_PACKAGES:-0}"
 RECREATE_ENV="${VM_RECREATE_ENV:-0}"
@@ -184,8 +187,9 @@ export DAE_PYTHON_BIN="$PYTHON_BIN"
 export VM_CONDA_ENV="$ENV_NAME"
 export DAE_TSE_REPO="${DAE_TSE_REPO}"
 export DAE_TSE_COMMIT="${DAE_TSE_COMMIT}"
-export DAE_TSE_CONFIG="${DAE_TSE_CONFIG:-}"
-export DAE_TSE_CHECKPOINT="${DAE_TSE_CHECKPOINT:-}"
+export DAE_TSE_CONFIG="${DAE_TSE_CONFIG}"
+export DAE_TSE_CHECKPOINT="${DAE_TSE_CHECKPOINT}"
+export DAE_TSE_CUE_HELPER="${DAE_TSE_CUE_HELPER}"
 export DATA_DIR="\${DATA_DIR:-$DATA_DIR}"
 export VM_OUT="\${VM_OUT:-$VM_OUT}"
 export ASR_MODEL_DIR="\${ASR_MODEL_DIR:-$ASR_MODEL_DIR}"
@@ -202,6 +206,7 @@ if [[ "$INSTALL_DAE" == "1" ]]; then
   VERIFY_ARGS+=(--dae-repo "$DAE_TSE_REPO")
   [[ -n "${DAE_TSE_CONFIG:-}" ]] && VERIFY_ARGS+=(--dae-config "$DAE_TSE_CONFIG")
   [[ -n "${DAE_TSE_CHECKPOINT:-}" ]] && VERIFY_ARGS+=(--dae-checkpoint "$DAE_TSE_CHECKPOINT")
+  [[ -n "${DAE_TSE_CUE_HELPER:-}" ]] && VERIFY_ARGS+=(--dae-cue-helper "$DAE_TSE_CUE_HELPER")
   [[ "$REQUIRE_DAE" == "1" ]] && VERIFY_ARGS+=(--require-dae)
 fi
 set +e

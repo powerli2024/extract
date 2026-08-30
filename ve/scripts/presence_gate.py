@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from audio_io import cosine_sim, peak_normalize, save_audio, vad_crop_speech
+from audio_io import cosine_sim, preprocess_for_separation, save_audio, vad_crop_speech
 from paths import default_moss_onnx_path, setup_sys_path
 from presence_encoder import PresenceEncoder
 
@@ -139,7 +139,7 @@ class PresenceGate:
         thr: float = 0.25,
         use_sep: bool = False,
         separator: Any | None = None,
-        peak: float = 0.95,
+        peak: float = 0.70,
         sep_depth: int = 1,
         min_stream_rms: float = 1e-4,
         max_sep_sec: float = 8.0,
@@ -242,7 +242,7 @@ class PresenceGate:
         if self.separator is None or not hasattr(self.separator, "separate"):
             return None
         try:
-            peak = peak_normalize(self._clip(wav, sr), peak=self.peak)
+            peak, sr = preprocess_for_separation(self._clip(wav, sr), sr, peak=self.peak)
             s1, s2 = self.separator.separate(peak, sr=sr)
             return (
                 np.asarray(s1, dtype=np.float32).reshape(-1),

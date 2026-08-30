@@ -18,6 +18,8 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from dae_cue_loader import load_text_to_phone_labels, resolve_cue_helper
+
 
 SAMPLE_RATE = 16000
 PSOK_ID = 71
@@ -28,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--dae-repo", type=Path, required=True)
+    parser.add_argument("--cue-helper", type=Path, default=None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--result-jsonl", type=Path, required=True)
@@ -79,7 +82,13 @@ def write_wave(path: Path, wave: torch.Tensor, expected_frames: int) -> None:
     sf.write(str(path), array, SAMPLE_RATE, subtype="PCM_16")
 
 
-def load_runtime(dae_repo: Path, config_path: Path, checkpoint_path: Path, device):
+def load_runtime(
+    dae_repo: Path,
+    config_path: Path,
+    checkpoint_path: Path,
+    device,
+    cue_helper_path: Path | None = None,
+):
     if not dae_repo.is_dir():
         raise FileNotFoundError(dae_repo)
     for path in (config_path, checkpoint_path):
@@ -87,12 +96,19 @@ def load_runtime(dae_repo: Path, config_path: Path, checkpoint_path: Path, devic
             raise FileNotFoundError(path)
     sys.path.insert(0, str(dae_repo.resolve()))
     import yaml
-    from tools.build_zh_text_cues import text_to_phone_labels
     from wesep.models import get_model
+
+    cue_helper = resolve_cue_helper(dae_repo, cue_helper_path)
+    text_to_phone_labels = load_text_to_phone_labels(cue_helper)
 
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     model_name = config["model"]["tse_model"]
     model_args = dict(config["model_args"]["tse_model"])
+    # Match the challengecup/official inference path: DAE-TSE uses text cues
+    # as its target condition, so an optional speaker-model bootstrap must not
+    # trigger a second weight download or an unrelated enrollment dependency.
+    if "spk_model_init" in model_args:
+        model_args["spk_model_init"] = False
     recipe_root = config_path.resolve().parents[2]
     previous_cwd = Path.cwd()
     try:
@@ -148,7 +164,11 @@ def main() -> None:
         raise RuntimeError("CUDA requested for DAE-TSE but torch.cuda.is_available() is false")
     rows = load_manifest(args.manifest)
     model, mapper, checkpoint_epoch = load_runtime(
-        args.dae_repo.resolve(), args.config.resolve(), args.checkpoint.resolve(), device
+        args.dae_repo.resolve(),
+        args.config.resolve(),
+        args.checkpoint.resolve(),
+        device,
+        args.cue_helper.resolve() if args.cue_helper else None,
     )
     results = []
     failures = 0

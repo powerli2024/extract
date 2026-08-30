@@ -77,6 +77,7 @@ if [[ -x "$PYTHON_BIN" ]] || command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     verify_args+=(--dae-repo "$DAE_TSE_REPO")
     [[ -n "${DAE_TSE_CONFIG:-}" ]] && verify_args+=(--dae-config "$DAE_TSE_CONFIG")
     [[ -n "${DAE_TSE_CHECKPOINT:-}" ]] && verify_args+=(--dae-checkpoint "$DAE_TSE_CHECKPOINT")
+    [[ -n "${DAE_TSE_CUE_HELPER:-}" ]] && verify_args+=(--dae-cue-helper "$DAE_TSE_CUE_HELPER")
     [[ "${REQUIRE_DAE_TSE:-0}" == "1" ]] && verify_args+=(--require-dae)
   fi
   set +e

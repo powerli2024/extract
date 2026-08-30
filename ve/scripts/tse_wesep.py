@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from audio_io import preprocess_for_separation
 from paths import default_model_dir, default_wesep_root, setup_sys_path
 
 setup_sys_path()
@@ -85,8 +86,10 @@ class WesepExtractor:
     ) -> tuple[np.ndarray, dict[str, Any]]:
         import torch
 
-        mix = np.asarray(mixture, dtype=np.float32).reshape(1, -1)
-        enr = np.asarray(enroll, dtype=np.float32).reshape(1, -1)
+        mix, sr = preprocess_for_separation(mixture, sr, peak=0.70)
+        enr, _ = preprocess_for_separation(enroll, sr, peak=0.70)
+        mix = mix.reshape(1, -1)
+        enr = enr.reshape(1, -1)
         mix_t = torch.from_numpy(mix)
         enr_t = torch.from_numpy(enr)
 

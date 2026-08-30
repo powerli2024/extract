@@ -46,7 +46,7 @@ DatasetA/{pos,neg}.jsonl + {pos,neg}/kws_*.wav
        /root/extract@main：Presence / CMD / 真实比赛评测
 ```
 
-可选 DAE-TSE 实验从 raw 或某个已冻结阶段 winner 分叉，输出到 `$VM_OUT/experiments/`；它不在上图默认主链内，也不会自动进入 handoff。
+可选 DAE-TSE 默认禁用；仅显式运行 `run_dae_tse.sh` 才从 raw 或某个已冻结阶段 winner 分叉，输出到 `$VM_OUT/experiments/`，不会进入默认主链或 handoff。所有分离模型调用前统一执行 mono/16 kHz、`[-1,1]` 限幅和峰值 `0.70` 预处理。
 
 这里的 `best_sep` 是开发期候选，不等于生产批准结果。阶段内和跨阶段都使用了已知唤醒文本的 oracle CER；正式采用仍需在冻结的 KWS、Presence/CMD 和比赛指标上独立复核。
 

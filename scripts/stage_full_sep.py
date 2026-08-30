@@ -40,7 +40,7 @@ from stage_resume import (
 )
 
 setup_sys_path()
-from utils_audio import load_audio, peak_normalize, save_audio  # noqa: E402
+from utils_audio import load_audio, preprocess_for_separation, save_audio  # noqa: E402
 
 
 def _sep_batch_size(backend: str) -> int:
@@ -136,7 +136,7 @@ def run_full_sep(
                 raise SystemExit(f"[ERR] item split 混入: {it}")
             try:
                 raw, sr = load_audio(it["kws_path"], 16000)
-                peak_wav = peak_normalize(raw, peak=peak)
+                peak_wav, sr = preprocess_for_separation(raw, sr, peak=peak)
                 prepared.append((it, peak_wav, sr))
             except Exception as e:
                 prepared.append((it, e, 16000))
